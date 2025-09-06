@@ -1,0 +1,57 @@
+# .slugignore - Exclude files from Heroku slug to reduce size
+
+# Documentation files
+*.md
+README*
+docs/
+HEROKU_DEPLOYMENT_GUIDE.md
+
+# Test files
+tests/
+test_*.py
+*_test.py
+
+# Development files
+.git/
+.gitignore
+.env*
+.vscode/
+.idea/
+
+# Log files
+*.log
+logs/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Temporary files
+*.tmp
+*.temp
+temp/
+
+# Large development scripts that aren't needed in production
+# (Files removed from repository)
+
+# Remove heavy packages from site-packages
+*.whl
+*.tar.gz
+
+# Screenshots and static assets not needed for production
+static/screenshots/*
+static/favicons/*
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Virtual environments
+venv/
+env/
+ENV/
+virtual_back/
