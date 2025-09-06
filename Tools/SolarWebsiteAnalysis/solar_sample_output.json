@@ -1,0 +1,15 @@
+{
+  "address": "1600 Amphitheatre Parkway, Mountain View, CA 94043",
+  "data_layers": {
+    "error": "API error: 401",
+    "response": ""
+  },
+  "insights": {
+    "error": "API error: 401",
+    "response": ""
+  },
+  "report": {
+    "error": "API error: 401",
+    "response": ""
+  }
+}
