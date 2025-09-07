@@ -4642,6 +4642,27 @@ class GHLSubAccountRequest(BaseModel):
     disable_contact_timezone: bool = False
     subaccount_name: Optional[str] = None
 
+class GHLRegistrationRequest(BaseModel):
+    """Request model for GHL subaccount creation during user registration"""
+    
+    # Required from registration form
+    full_name: str
+    email: str
+    
+    # Optional - will use defaults if not provided
+    phone: Optional[str] = "+17166044029"
+    address: Optional[str] = "456 Solar Demo Avenue" 
+    city: Optional[str] = "Buffalo"
+    state: Optional[str] = "NY"
+    country: Optional[str] = "US"
+    postal_code: Optional[str] = "14201"
+    timezone: Optional[str] = None  # Auto-detected from country
+    website: Optional[str] = None   # Will generate default
+    
+    # Internal fields (populated automatically)
+    user_id: Optional[str] = None   # Looked up from profiles table
+    company_id: Optional[str] = None # Looked up from profiles table
+
 class SecureGHLSubAccountRequest(BaseModel):
     subaccount_name: Optional[str] = None
     phone: Optional[str] = None
@@ -5733,6 +5754,598 @@ async def create_subaccount_and_user(request: GHLSubAccountRequest):
         
     except Exception as e:
         logger.error(f"Error in combined creation: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+async def run_ghl_creation_background(
+    ghl_record_id: str, 
+    user_id: str, 
+    company_id: str,
+    subaccount_name: str,
+    phone: str,
+    address: str,
+    city: str,
+    state: str,
+    country: str,
+    postal_code: str,
+    timezone: str,
+    website: str,
+    prospect_first_name: str,
+    prospect_last_name: str,
+    prospect_email: str
+):
+    """Background task for GHL subaccount and user creation during registration"""
+    try:
+        print(f"[GHL BACKGROUND] 🚀 Starting background GHL creation for record: {ghl_record_id}")
+        
+        # Update status to running
+        supabase.table('ghl_subaccounts').update({
+            'creation_status': 'creating',
+            'updated_at': datetime.now().isoformat()
+        }).eq('id', ghl_record_id).execute()
+        
+        # Step 1: Create the sub-account using existing function
+        secure_request = SecureGHLSubAccountRequest(
+            subaccount_name=subaccount_name,
+            phone=phone,
+            address=address,
+            city=city,
+            state=state,
+            country=country,
+            postal_code=postal_code,
+            timezone=timezone or "America/New_York",
+            website=website,
+            prospect_email=prospect_email,
+            prospect_first_name=prospect_first_name,
+            prospect_last_name=prospect_last_name,
+            allow_duplicate_contact=False,
+            allow_duplicate_opportunity=False,
+            allow_facebook_name_merge=False,
+            disable_contact_timezone=False
+        )
+        
+        print(f"[GHL BACKGROUND] 📍 Creating GHL subaccount...")
+        subaccount_response = await create_ghl_subaccount(secure_request)
+        
+        if subaccount_response["status"] != "success":
+            raise Exception(f"Subaccount creation failed: {subaccount_response}")
+        
+        location_id = subaccount_response["location_id"]
+        print(f"[GHL BACKGROUND] ✅ Subaccount created with location_id: {location_id}")
+        
+        # Update database with subaccount creation success
+        supabase.table('ghl_subaccounts').update({
+            'ghl_location_id': location_id,
+            'ghl_company_id': subaccount_response.get("company_id"),
+            'ghl_snapshot_id': subaccount_response.get("snapshot_id"),
+            'subaccount_created_at': datetime.now().isoformat(),
+            'creation_status': 'subaccount_created',
+            'updated_at': datetime.now().isoformat()
+        }).eq('id', ghl_record_id).execute()
+        
+        # Step 2: Create Soma user
+        print(f"[GHL BACKGROUND] 👤 Creating Soma user...")
+        
+        # Generate unique email for Soma
+        soma_unique_email = f"somashekhar34+{location_id[:8]}@gmail.com"
+        
+        # Get GHL credentials
+        company_id_ghl = os.getenv("GHL_COMPANY_ID", "lp2p1q27DrdGta1qGDJd")
+        agency_token = os.getenv("GHL_AGENCY_TOKEN", "pit-e3d8d384-00cb-4744-8213-b1ab06ae71fe")
+        
+        # Use the same permissions and scopes from the original function
+        full_permissions = {
+            "campaignsEnabled": True,
+            "campaignsReadOnly": False,
+            "contactsEnabled": True,
+            "workflowsEnabled": True,
+            "workflowsReadOnly": False,
+            "triggersEnabled": True,
+            "funnelsEnabled": True,
+            "websitesEnabled": True,
+            "opportunitiesEnabled": True,
+            "dashboardStatsEnabled": True,
+            "bulkRequestsEnabled": True,
+            "appointmentsEnabled": True,
+            "reviewsEnabled": True,
+            "onlineListingsEnabled": True,
+            "phoneCallEnabled": True,
+            "conversationsEnabled": True,
+            "assignedDataOnly": False,
+            "adwordsReportingEnabled": True,
+            "membershipEnabled": True,
+            "facebookAdsReportingEnabled": True,
+            "attributionsReportingEnabled": True,
+            "settingsEnabled": True,
+            "tagsEnabled": True,
+            "leadValueEnabled": True,
+            "marketingEnabled": True,
+            "agentReportingEnabled": True,
+            "botService": True,
+            "socialPlanner": True,
+            "bloggingEnabled": True,
+            "invoiceEnabled": True,
+            "affiliateManagerEnabled": True,
+            "contentAiEnabled": True,
+            "refundsEnabled": True,
+            "recordPaymentEnabled": True,
+            "cancelSubscriptionEnabled": True,
+            "paymentsEnabled": True,
+            "communitiesEnabled": True,
+            "exportPaymentsEnabled": True
+        }
+        
+        location_scopes = [
+            "adPublishing.readonly", "adPublishing.write", "blogs.write", "calendars.readonly",
+            "calendars.write", "calendars/events.write", "calendars/groups.write", "campaigns.write",
+            "certificates.readonly", "certificates.write", "communities.write", "contacts.write",
+            "contacts/bulkActions.write", "contentAI.write", "conversations.readonly", "conversations.write",
+            "conversations/message.readonly", "conversations/message.write", "custom-menu-link.write",
+            "dashboard/stats.readonly", "forms.write", "funnels.write", "gokollab.write",
+            "invoices.readonly", "invoices.write", "invoices/schedule.readonly", "invoices/schedule.write",
+            "invoices/template.readonly", "invoices/template.write", "locations/tags.readonly",
+            "locations/tags.write", "marketing.write", "marketing/affiliate.write", "medias.readonly",
+            "medias.write", "membership.write", "native-integrations.readonly", "native-integrations.write",
+            "opportunities.write", "opportunities/bulkActions.write", "opportunities/leadValue.readonly",
+            "payments.write", "payments/exports.write", "payments/records.write", "payments/refunds.write",
+            "payments/subscriptionsCancel.write", "prospecting.readonly", "prospecting.write",
+            "prospecting/auditReport.write", "prospecting/reports.readonly", "qrcodes.write",
+            "quizzes.write", "reporting/adwords.readonly", "reporting/agent.readonly",
+            "reporting/attributions.readonly", "reporting/facebookAds.readonly", "reporting/phone.readonly",
+            "reporting/reports.readonly", "reporting/reports.write", "reputation/listing.write",
+            "reputation/review.write", "settings.write", "socialplanner/account.readonly",
+            "socialplanner/account.write", "socialplanner/category.readonly", "socialplanner/category.write",
+            "socialplanner/csv.readonly", "socialplanner/csv.write", "socialplanner/facebook.readonly",
+            "socialplanner/filters.readonly", "socialplanner/group.write", "socialplanner/hashtag.readonly",
+            "socialplanner/hashtag.write", "socialplanner/linkedin.readonly", "socialplanner/medias.readonly",
+            "socialplanner/medias.write", "socialplanner/metatag.readonly", "socialplanner/notification.readonly",
+            "socialplanner/notification.write", "socialplanner/oauth.readonly", "socialplanner/oauth.write",
+            "socialplanner/post.readonly", "socialplanner/post.write", "socialplanner/recurring.readonly",
+            "socialplanner/recurring.write", "socialplanner/review.readonly", "socialplanner/review.write",
+            "socialplanner/rss.readonly", "socialplanner/rss.write", "socialplanner/search.readonly",
+            "socialplanner/setting.readonly", "socialplanner/setting.write", "socialplanner/snapshot.readonly",
+            "socialplanner/snapshot.write", "socialplanner/stat.readonly", "socialplanner/tag.readonly",
+            "socialplanner/tag.write", "socialplanner/twitter.readonly", "socialplanner/watermarks.readonly",
+            "socialplanner/watermarks.write", "surveys.write", "triggers.write", "voice-ai-agent-goals.readonly",
+            "voice-ai-agent-goals.write", "voice-ai-agents.write", "voice-ai-dashboard.readonly",
+            "websites.write", "wordpress.read", "wordpress.write", "workflows.write"
+        ]
+        
+        # Add delay for location propagation
+        await asyncio.sleep(5)
+        
+        soma_user_response = await create_agency_user(
+            company_id=company_id_ghl,
+            location_id=location_id,
+            agency_token=agency_token,
+            first_name="Soma",
+            last_name="Addakula",
+            email=soma_unique_email,
+            password="Dummy@123",
+            phone="+17166044029",
+            role="admin",
+            permissions=full_permissions,
+            scopes=location_scopes
+        )
+        
+        if soma_user_response.get("status") != "success":
+            raise Exception(f"Soma user creation failed: {soma_user_response}")
+        
+        soma_user_id = soma_user_response.get("user_id")
+        print(f"[GHL BACKGROUND] ✅ Soma user created with ID: {soma_user_id}")
+        
+        # Update database with Soma user creation success
+        supabase.table('ghl_subaccounts').update({
+            'soma_ghl_user_id': soma_user_id,
+            'soma_ghl_email': soma_unique_email,
+            'soma_ghl_password': "Dummy@123",
+            'soma_user_created_at': datetime.now().isoformat(),
+            'creation_status': 'created',
+            'automation_status': 'ready',
+            'updated_at': datetime.now().isoformat()
+        }).eq('id', ghl_record_id).execute()
+        
+        # Step 3: Create Facebook integration record
+        facebook_record_id = str(uuid.uuid4())
+        
+        print(f"[GHL BACKGROUND] 📱 Creating Facebook integration record...")
+        supabase.table('facebook_integrations').insert({
+            'id': facebook_record_id,
+            'firm_user_id': user_id,
+            'firm_id': company_id,
+            'ghl_subaccount_id': ghl_record_id,
+            'ghl_location_id': location_id,
+            'facebook_email': soma_unique_email,
+            'facebook_password': "Dummy@123",
+            'soma_ghl_user_id': soma_user_id,
+            'automation_status': 'ready'
+        }).execute()
+        
+        # Step 4: Start Facebook automation background task
+        print(f"[GHL BACKGROUND] 🚀 Starting Facebook automation...")
+        asyncio.create_task(run_facebook_automation_registration(
+            facebook_record_id=facebook_record_id,
+            ghl_record_id=ghl_record_id,
+            location_id=location_id,
+            email=soma_unique_email,
+            password="Dummy@123",
+            firm_user_id=user_id,
+            ghl_user_id=soma_user_id
+        ))
+        
+        print(f"[GHL BACKGROUND] ✅ GHL creation completed successfully!")
+        print(f"[GHL BACKGROUND] 🎯 Location ID: {location_id}")
+        print(f"[GHL BACKGROUND] 👤 Soma User ID: {soma_user_id}")
+        print(f"[GHL BACKGROUND] 📱 Facebook automation started")
+        
+    except Exception as e:
+        error_msg = str(e)
+        print(f"[GHL BACKGROUND] ❌ Background creation failed: {error_msg}")
+        
+        # Update database with error
+        supabase.table('ghl_subaccounts').update({
+            'creation_status': 'failed',
+            'creation_error': error_msg,
+            'updated_at': datetime.now().isoformat()
+        }).eq('id', ghl_record_id).execute()
+
+async def run_facebook_automation_registration(
+    facebook_record_id: str,
+    ghl_record_id: str, 
+    location_id: str, 
+    email: str, 
+    password: str, 
+    firm_user_id: str, 
+    ghl_user_id: str = None
+):
+    """Run Facebook automation for registration-created GHL accounts"""
+    try:
+        print(f"[FACEBOOK REG] 🚀 Starting Facebook automation for registration")
+        print(f"[FACEBOOK REG] Facebook Record ID: {facebook_record_id}")
+        print(f"[FACEBOOK REG] GHL Record ID: {ghl_record_id}")
+        print(f"[FACEBOOK REG] Location ID: {location_id}")
+        print(f"[FACEBOOK REG] Email: {email}")
+        
+        # Update status to running
+        supabase.table('facebook_integrations').update({
+            'automation_status': 'running',
+            'automation_step': 'starting',
+            'automation_started_at': datetime.now().isoformat(),
+            'updated_at': datetime.now().isoformat()
+        }).eq('id', facebook_record_id).execute()
+        
+        # Also update ghl_subaccounts automation status
+        supabase.table('ghl_subaccounts').update({
+            'automation_status': 'running',
+            'updated_at': datetime.now().isoformat()
+        }).eq('id', ghl_record_id).execute()
+        
+        print(f"[FACEBOOK REG] ✅ Updated automation status to 'running'")
+        
+        # Import and run the Playwright automation
+        try:
+            print(f"[FACEBOOK REG] 📦 Loading Playwright automation module...")
+            from ghl_automation_complete_playwright import HighLevelCompleteAutomationPlaywright
+            
+            print(f"[FACEBOOK REG] 🚀 Initializing automation (headless mode)...")
+            automation = HighLevelCompleteAutomationPlaywright(headless=True)
+            
+            print(f"[FACEBOOK REG] ▶️ Starting automation workflow...")
+            success = await automation.run_automation(
+                email=email, 
+                password=password, 
+                location_id=location_id, 
+                firm_user_id=firm_user_id, 
+                agent_id='SOL', 
+                ghl_user_id=ghl_user_id,
+                save_to_database=False  # We handle database operations in main backend
+            )
+            
+            if success:
+                # Extract tokens and comprehensive results
+                pit_token = automation.pit_token if hasattr(automation, 'pit_token') else None
+                access_token = automation.access_token if hasattr(automation, 'access_token') else None
+                firebase_token = automation.firebase_token if hasattr(automation, 'firebase_token') else None
+                
+                # Extract additional metadata if available
+                token_expiry = None
+                if hasattr(automation, 'token_expiry') and automation.token_expiry:
+                    token_expiry = automation.token_expiry.isoformat()
+                
+                # Extract Facebook business information if available
+                facebook_business_id = getattr(automation, 'facebook_business_id', None)
+                facebook_ad_account_id = getattr(automation, 'facebook_ad_account_id', None) 
+                facebook_page_id = getattr(automation, 'facebook_page_id', None)
+                
+                # Comprehensive automation result
+                automation_result = {
+                    'success': True,
+                    'pit_token_created': bool(pit_token),
+                    'access_token_captured': bool(access_token),
+                    'firebase_token_captured': bool(firebase_token),
+                    'token_expiry': token_expiry,
+                    'facebook_business_id': facebook_business_id,
+                    'facebook_ad_account_id': facebook_ad_account_id,
+                    'facebook_page_id': facebook_page_id,
+                    'automation_completed_at': datetime.now().isoformat()
+                }
+                
+                # Update Facebook integration with comprehensive success data
+                supabase.table('facebook_integrations').update({
+                    'automation_status': 'completed',
+                    'automation_step': 'completed',
+                    'automation_completed_at': datetime.now().isoformat(),
+                    'pit_token': pit_token,
+                    'access_token': access_token,
+                    'firebase_token': firebase_token,
+                    'access_token_expires_at': token_expiry,
+                    'facebook_business_id': facebook_business_id,
+                    'facebook_ad_account_id': facebook_ad_account_id,
+                    'facebook_page_id': facebook_page_id,
+                    'automation_result': automation_result,
+                    'updated_at': datetime.now().isoformat()
+                }).eq('id', facebook_record_id).execute()
+                
+                # Update ghl_subaccounts automation status
+                supabase.table('ghl_subaccounts').update({
+                    'automation_status': 'completed',
+                    'updated_at': datetime.now().isoformat()
+                }).eq('id', ghl_record_id).execute()
+                
+                print(f"[FACEBOOK REG] ✅ FACEBOOK AUTOMATION SUCCESSFUL!")
+                print(f"[FACEBOOK REG] 🎉 PIT Token: {pit_token[:30] if pit_token else 'None'}...")
+                print(f"[FACEBOOK REG] 🔑 Access Token: {'✅ Captured' if access_token else '❌ Missing'}")
+                print(f"[FACEBOOK REG] 🔥 Firebase Token: {'✅ Captured' if firebase_token else '❌ Missing'}")
+                
+            else:
+                # Update with failure
+                error_msg = "Automation workflow failed - check detailed logs"
+                
+                supabase.table('facebook_integrations').update({
+                    'automation_status': 'failed',
+                    'automation_step': 'failed',
+                    'automation_completed_at': datetime.now().isoformat(),
+                    'automation_error': error_msg,
+                    'automation_result': {
+                        'success': False,
+                        'error': error_msg
+                    },
+                    'updated_at': datetime.now().isoformat()
+                }).eq('id', facebook_record_id).execute()
+                
+                supabase.table('ghl_subaccounts').update({
+                    'automation_status': 'failed',
+                    'automation_error': error_msg,
+                    'updated_at': datetime.now().isoformat()
+                }).eq('id', ghl_record_id).execute()
+                
+                print(f"[FACEBOOK REG] ❌ FACEBOOK AUTOMATION FAILED!")
+                print(f"[FACEBOOK REG] {error_msg}")
+                
+        except ImportError as import_error:
+            error_msg = f"Could not import automation module: {import_error}"
+            print(f"[FACEBOOK REG] ❌ IMPORT ERROR: {error_msg}")
+            
+            supabase.table('facebook_integrations').update({
+                'automation_status': 'failed',
+                'automation_step': 'import_error',
+                'automation_completed_at': datetime.now().isoformat(),
+                'automation_error': error_msg,
+                'retry_count': supabase.table('facebook_integrations').select('retry_count').eq('id', facebook_record_id).execute().data[0]['retry_count'] + 1,
+                'updated_at': datetime.now().isoformat()
+            }).eq('id', facebook_record_id).execute()
+            
+        except Exception as automation_error:
+            error_msg = f"Automation execution failed: {automation_error}"
+            print(f"[FACEBOOK REG] ❌ EXECUTION ERROR: {error_msg}")
+            
+            supabase.table('facebook_integrations').update({
+                'automation_status': 'failed',
+                'automation_step': 'execution_error',
+                'automation_completed_at': datetime.now().isoformat(),
+                'automation_error': error_msg,
+                'updated_at': datetime.now().isoformat()
+            }).eq('id', facebook_record_id).execute()
+            
+    except Exception as e:
+        error_msg = f"Background Facebook automation failed: {e}"
+        print(f"[FACEBOOK REG] ❌ BACKGROUND ERROR: {error_msg}")
+        
+        # Update with error
+        try:
+            supabase.table('facebook_integrations').update({
+                'automation_status': 'failed',
+                'automation_step': 'background_error',
+                'automation_completed_at': datetime.now().isoformat(),
+                'automation_error': error_msg,
+                'updated_at': datetime.now().isoformat()
+            }).eq('id', facebook_record_id).execute()
+        except:
+            print(f"[FACEBOOK REG] ❌ Could not update database with error status")
+
+@app.post("/api/ghl/create-subaccount-and-user-registration")
+async def create_subaccount_and_user_registration(request: GHLRegistrationRequest):
+    """Create GHL sub-account and user during user registration - runs as async job"""
+    try:
+        print(f"[GHL REGISTRATION] 🚀 Starting GHL account creation for registration")
+        print(f"[GHL REGISTRATION] Full Name: {request.full_name}")
+        print(f"[GHL REGISTRATION] Email: {request.email}")
+        
+        # Step 1: Lookup user_id and company_id from profiles table
+        print(f"[GHL REGISTRATION] 🔍 Looking up user profile by email: {request.email}")
+        
+        user_profile = supabase.table('profiles')\
+            .select('user_id, company_id')\
+            .eq('email', request.email)\
+            .single()\
+            .execute()
+        
+        if not user_profile.data:
+            raise HTTPException(status_code=404, detail=f"User profile not found for email: {request.email}")
+        
+        user_id = user_profile.data['user_id']
+        company_id = user_profile.data['company_id']
+        
+        print(f"[GHL REGISTRATION] ✅ Found user profile:")
+        print(f"[GHL REGISTRATION]   user_id (firm_user_id): {user_id}")
+        print(f"[GHL REGISTRATION]   company_id (firm_id): {company_id}")
+        
+        # Step 2: Parse full name into first and last name
+        name_parts = request.full_name.strip().split(' ', 1)
+        first_name = name_parts[0]
+        last_name = name_parts[1] if len(name_parts) > 1 else "Client"
+        
+        # Step 3: Generate subaccount name and website
+        timestamp = datetime.now().strftime("%H%M%S")
+        subaccount_name = f"{request.full_name} @Client_{request.email}"
+        website = request.website or f"https://client-{timestamp}.com"
+        
+        print(f"[GHL REGISTRATION] 📝 Generated values:")
+        print(f"[GHL REGISTRATION]   subaccount_name: {subaccount_name}")
+        print(f"[GHL REGISTRATION]   prospect_first_name: {first_name}")
+        print(f"[GHL REGISTRATION]   prospect_last_name: {last_name}")
+        print(f"[GHL REGISTRATION]   website: {website}")
+        
+        # Step 4: Create entry in ghl_subaccounts table (pending status)
+        ghl_record_id = str(uuid.uuid4())
+        
+        print(f"[GHL REGISTRATION] 💾 Creating database record...")
+        supabase.table('ghl_subaccounts').insert({
+            'id': ghl_record_id,
+            'firm_user_id': user_id,
+            'firm_id': company_id,
+            'agent_id': 'SOL',
+            'subaccount_name': subaccount_name,
+            'business_phone': request.phone,
+            'business_address': request.address,
+            'business_city': request.city,
+            'business_state': request.state,
+            'business_country': request.country,
+            'business_postal_code': request.postal_code,
+            'business_timezone': request.timezone or "America/New_York",
+            'business_website': website,
+            'prospect_first_name': first_name,
+            'prospect_last_name': last_name,
+            'prospect_email': request.email,
+            'creation_status': 'pending',
+            'automation_status': 'not_started'
+        }).execute()
+        
+        print(f"[GHL REGISTRATION] ✅ Database record created: {ghl_record_id}")
+        
+        # Step 5: Run GHL creation as async background task
+        print(f"[GHL REGISTRATION] 🚀 Starting background GHL creation task...")
+        
+        asyncio.create_task(run_ghl_creation_background(
+            ghl_record_id=ghl_record_id,
+            user_id=user_id,
+            company_id=company_id,
+            subaccount_name=subaccount_name,
+            phone=request.phone,
+            address=request.address,
+            city=request.city,
+            state=request.state,
+            country=request.country,
+            postal_code=request.postal_code,
+            timezone=request.timezone,
+            website=website,
+            prospect_first_name=first_name,
+            prospect_last_name=last_name,
+            prospect_email=request.email
+        ))
+        
+        # Step 6: Return immediate response while background task runs
+        return {
+            "status": "accepted",
+            "message": "GHL account creation started successfully",
+            "ghl_record_id": ghl_record_id,
+            "user_id": user_id,
+            "company_id": company_id,
+            "subaccount_name": subaccount_name,
+            "background_task_started": True,
+            "check_status_endpoint": f"/api/ghl/status/{ghl_record_id}",
+            "created_at": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Error in registration GHL creation: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/ghl/status/{ghl_record_id}")
+async def get_ghl_status(ghl_record_id: str):
+    """Get status of GHL subaccount creation and Facebook automation"""
+    try:
+        print(f"[GHL STATUS] 📊 Checking status for record: {ghl_record_id}")
+        
+        # Get GHL subaccount status
+        ghl_result = supabase.table('ghl_subaccounts')\
+            .select('*')\
+            .eq('id', ghl_record_id)\
+            .single()\
+            .execute()
+        
+        if not ghl_result.data:
+            raise HTTPException(status_code=404, detail=f"GHL record not found: {ghl_record_id}")
+        
+        ghl_data = ghl_result.data
+        
+        # Get Facebook integration status if available
+        facebook_result = supabase.table('facebook_integrations')\
+            .select('*')\
+            .eq('ghl_subaccount_id', ghl_record_id)\
+            .execute()
+        
+        facebook_data = facebook_result.data[0] if facebook_result.data else None
+        
+        # Build response
+        response = {
+            "ghl_record_id": ghl_record_id,
+            "ghl_status": {
+                "creation_status": ghl_data['creation_status'],
+                "automation_status": ghl_data['automation_status'],
+                "location_id": ghl_data.get('ghl_location_id'),
+                "soma_user_id": ghl_data.get('soma_ghl_user_id'),
+                "subaccount_name": ghl_data['subaccount_name'],
+                "created_at": ghl_data['created_at'],
+                "subaccount_created_at": ghl_data.get('subaccount_created_at'),
+                "soma_user_created_at": ghl_data.get('soma_user_created_at'),
+                "creation_error": ghl_data.get('creation_error'),
+                "automation_error": ghl_data.get('automation_error')
+            },
+            "facebook_status": None,
+            "overall_status": ghl_data['creation_status'],
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        # Add Facebook status if available
+        if facebook_data:
+            response["facebook_status"] = {
+                "automation_status": facebook_data['automation_status'],
+                "automation_step": facebook_data.get('automation_step'),
+                "pit_token_available": bool(facebook_data.get('pit_token')),
+                "access_token_available": bool(facebook_data.get('access_token')),
+                "firebase_token_available": bool(facebook_data.get('firebase_token')),
+                "automation_started_at": facebook_data.get('automation_started_at'),
+                "automation_completed_at": facebook_data.get('automation_completed_at'),
+                "automation_error": facebook_data.get('automation_error'),
+                "retry_count": facebook_data.get('retry_count', 0),
+                "automation_result": facebook_data.get('automation_result')
+            }
+            
+            # Update overall status based on both GHL and Facebook
+            if ghl_data['creation_status'] == 'created' and facebook_data['automation_status'] == 'completed':
+                response["overall_status"] = 'fully_completed'
+            elif ghl_data['creation_status'] == 'created' and facebook_data['automation_status'] in ['running', 'ready']:
+                response["overall_status"] = 'facebook_in_progress'
+            elif ghl_data['creation_status'] == 'failed' or facebook_data['automation_status'] == 'failed':
+                response["overall_status"] = 'failed'
+        
+        print(f"[GHL STATUS] ✅ Status retrieved successfully")
+        print(f"[GHL STATUS] Overall Status: {response['overall_status']}")
+        
+        return response
+        
+    except Exception as e:
+        logger.error(f"Error retrieving GHL status: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # =============================================================================
@@ -6969,6 +7582,236 @@ async def get_facebook_pages_by_location(request: dict):
         raise HTTPException(status_code=500, detail=str(e))
 
 # =============================================================================
+# NEW FACEBOOK ENDPOINTS USING facebook_integrations TABLE
+# =============================================================================
+
+@app.post("/api/facebook/check-integration-status")
+async def check_facebook_integration_status(request: dict):
+    """
+    Check if facebook_integrations record exists for a user and has tokens
+    """
+    try:
+        firm_user_id = request.get('firm_user_id')
+        if not firm_user_id:
+            # Try to get from profiles table using email
+            email = request.get('email')
+            if email:
+                profile_result = supabase.table('profiles').select('user_id').eq('email', email).single().execute()
+                if profile_result.data:
+                    firm_user_id = profile_result.data['user_id']
+        
+        if not firm_user_id:
+            return {
+                "exists": False,
+                "has_tokens": False,
+                "message": "User ID not provided"
+            }
+        
+        print(f"[FB CHECK] Checking integration status for user: {firm_user_id}")
+        
+        # Check facebook_integrations table
+        result = supabase.table('facebook_integrations').select(
+            'id, firm_user_id, ghl_location_id, private_integration_token, '
+            'access_token, firebase_token, automation_status, automation_completed_at, '
+            'facebook_business_id, facebook_page_id, selected_pages'
+        ).eq('firm_user_id', firm_user_id).execute()
+        
+        if not result.data or len(result.data) == 0:
+            print(f"[FB CHECK] No integration found for user: {firm_user_id}")
+            return {
+                "exists": False,
+                "has_tokens": False,
+                "message": "No Facebook integration found"
+            }
+        
+        # Get the most recent integration
+        integration = result.data[0]
+        has_pit = bool(integration.get('private_integration_token'))
+        has_access = bool(integration.get('access_token'))
+        has_firebase = bool(integration.get('firebase_token'))
+        
+        print(f"[FB CHECK] Found integration - PIT: {has_pit}, Access: {has_access}, Firebase: {has_firebase}")
+        
+        return {
+            "exists": True,
+            "has_tokens": has_pit,
+            "has_pit_token": has_pit,
+            "has_access_token": has_access,
+            "has_firebase_token": has_firebase,
+            "automation_status": integration.get('automation_status'),
+            "automation_completed_at": integration.get('automation_completed_at'),
+            "facebook_business_id": integration.get('facebook_business_id'),
+            "facebook_page_id": integration.get('facebook_page_id'),
+            "selected_pages": integration.get('selected_pages'),
+            "ghl_location_id": integration.get('ghl_location_id'),
+            "message": "Integration found with tokens" if has_pit else "Integration found but missing tokens"
+        }
+        
+    except Exception as e:
+        print(f"[FB CHECK] Error checking integration status: {e}")
+        return {
+            "exists": False,
+            "has_tokens": False,
+            "error": str(e),
+            "message": f"Error checking integration: {str(e)}"
+        }
+
+@app.post("/api/facebook/get-pages-from-integration")
+async def get_facebook_pages_from_integration(request: dict):
+    """
+    Get Facebook pages using tokens stored in facebook_integrations table
+    """
+    try:
+        firm_user_id = request.get('firm_user_id')
+        if not firm_user_id:
+            raise HTTPException(status_code=400, detail="firm_user_id is required")
+        
+        print(f"[FB PAGES] Getting pages for user: {firm_user_id}")
+        
+        # Get integration record
+        integration_result = supabase.table('facebook_integrations').select(
+            'ghl_location_id, private_integration_token, firebase_token, '
+            'facebook_business_id, selected_pages'
+        ).eq('firm_user_id', firm_user_id).execute()
+        
+        if not integration_result.data or len(integration_result.data) == 0:
+            raise HTTPException(status_code=404, detail="Facebook integration not found")
+        
+        integration = integration_result.data[0]
+        pit_token = integration.get('private_integration_token')
+        firebase_token = integration.get('firebase_token')
+        location_id = integration.get('ghl_location_id')
+        
+        if not pit_token:
+            raise HTTPException(status_code=400, detail="PIT token not found in integration")
+        
+        if not firebase_token:
+            raise HTTPException(status_code=400, detail="Firebase token not found in integration")
+        
+        print(f"[FB PAGES] Found tokens - Location: {location_id}")
+        
+        # Call GHL API to get Facebook pages
+        ghl_api_url = f"https://services.leadconnectorhq.com/locations/{location_id}/integrations/facebook/pages"
+        
+        headers = {
+            "Authorization": f"Bearer {pit_token}",
+            "token-id": firebase_token,
+            "Version": "2021-04-15",
+            "Content-Type": "application/json"
+        }
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(ghl_api_url, headers=headers)
+            
+            if response.status_code != 200:
+                print(f"[FB PAGES] GHL API error: {response.status_code} - {response.text}")
+                raise HTTPException(
+                    status_code=response.status_code,
+                    detail=f"Failed to get pages from GHL: {response.text}"
+                )
+            
+            pages_data = response.json()
+            pages = pages_data.get('pages', [])
+            
+            print(f"[FB PAGES] Retrieved {len(pages)} pages from GHL")
+            
+            # Format pages for frontend
+            formatted_pages = []
+            for page in pages:
+                formatted_pages.append({
+                    "page_id": page.get("facebookPageId") or page.get("id"),
+                    "page_name": page.get("facebookPageName") or page.get("name"),
+                    "instagram_available": page.get("isInstagramAvailable", False),
+                    "connected": page.get("connected", False)
+                })
+            
+            return {
+                "success": True,
+                "pages": formatted_pages,
+                "total_pages": len(formatted_pages),
+                "message": f"Found {len(formatted_pages)} Facebook pages"
+            }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[FB PAGES] Error getting pages: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/facebook/save-selected-pages")
+async def save_selected_facebook_pages(request: dict):
+    """
+    Save selected Facebook pages to facebook_integrations table
+    """
+    try:
+        firm_user_id = request.get('firm_user_id')
+        selected_page_ids = request.get('selected_page_ids', [])
+        
+        if not firm_user_id:
+            raise HTTPException(status_code=400, detail="firm_user_id is required")
+        
+        if not selected_page_ids:
+            raise HTTPException(status_code=400, detail="No pages selected")
+        
+        print(f"[FB SAVE] Saving {len(selected_page_ids)} pages for user: {firm_user_id}")
+        
+        # Update facebook_integrations record
+        update_result = supabase.table('facebook_integrations').update({
+            'selected_pages': selected_page_ids,
+            'facebook_page_id': selected_page_ids[0] if len(selected_page_ids) == 1 else None,
+            'setup_completed': True,
+            'status': 'active',
+            'updated_at': datetime.now().isoformat()
+        }).eq('firm_user_id', firm_user_id).execute()
+        
+        if not update_result.data:
+            raise HTTPException(status_code=404, detail="Failed to update integration")
+        
+        print(f"[FB SAVE] Successfully saved {len(selected_page_ids)} pages")
+        
+        # Also connect pages in GHL if we have the tokens
+        integration_result = supabase.table('facebook_integrations').select(
+            'ghl_location_id, private_integration_token, firebase_token'
+        ).eq('firm_user_id', firm_user_id).single().execute()
+        
+        if integration_result.data:
+            integration = integration_result.data
+            pit_token = integration.get('private_integration_token')
+            firebase_token = integration.get('firebase_token')
+            location_id = integration.get('ghl_location_id')
+            
+            if pit_token and firebase_token and location_id:
+                # Connect pages in GHL
+                for page_id in selected_page_ids:
+                    try:
+                        ghl_api_url = f"https://services.leadconnectorhq.com/locations/{location_id}/integrations/facebook/pages/{page_id}/connect"
+                        
+                        headers = {
+                            "Authorization": f"Bearer {pit_token}",
+                            "token-id": firebase_token,
+                            "Version": "2021-04-15",
+                            "Content-Type": "application/json"
+                        }
+                        
+                        async with httpx.AsyncClient(timeout=30.0) as client:
+                            response = await client.post(ghl_api_url, headers=headers, json={})
+                            print(f"[FB SAVE] Connected page {page_id} in GHL: {response.status_code}")
+                    except Exception as e:
+                        print(f"[FB SAVE] Error connecting page {page_id} in GHL: {e}")
+        
+        return {
+            "success": True,
+            "saved_pages": selected_page_ids,
+            "message": f"Successfully saved {len(selected_page_ids)} pages"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[FB SAVE] Error saving pages: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# =============================================================================
 # BUSINESS PROFILE ENDPOINTS
 # =============================================================================
 
@@ -7310,7 +8153,8 @@ async def run_facebook_automation_for_business(business_id: str, location_id: st
                 location_id=location_id, 
                 firm_user_id=firm_user_id, 
                 agent_id='SOLAgent', 
-                ghl_user_id=ghl_user_id
+                ghl_user_id=ghl_user_id,
+                save_to_database=False  # We handle database operations in main backend
             )
             
             if success:
@@ -7390,7 +8234,7 @@ async def run_playwright_automation_background(business_id: str, email: str, pas
         try:
             from ghl_automation_complete_playwright import HighLevelCompleteAutomationPlaywright
             automation = HighLevelCompleteAutomationPlaywright(headless=True)
-            success = await automation.run_automation(email, password, location_id, firm_user_id, agent_id, ghl_user_id)
+            success = await automation.run_automation(email, password, location_id, firm_user_id, agent_id, ghl_user_id, save_to_database=False)
             
             if success:
                 # Update status to completed and save PIT token
