@@ -8117,9 +8117,10 @@ async def connect_selected_pages(request: dict):
             "total_pages": len(selected_page_ids)
         }
         
-        # Update facebook_integrations record
+        # Update facebook_integrations record with connected_pages data
         update_result = supabase.table('facebook_integrations').update({
             'automation_result': automation_result,
+            'connected_pages': selected_pages_data,  # Store connected pages in new column
             'automation_status': 'completed',
             'automation_completed_at': datetime.now().isoformat(),
             'updated_at': datetime.now().isoformat()
@@ -8183,6 +8184,55 @@ async def connect_selected_pages(request: dict):
         raise
     except Exception as e:
         print(f"[FB CONNECT] Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/facebook/get-connection-status")
+async def get_facebook_connection_status(firm_user_id: str):
+    """
+    Check if user has connected Facebook pages
+    Returns connection status for UI step marking
+    """
+    try:
+        if not firm_user_id:
+            raise HTTPException(status_code=400, detail="firm_user_id is required")
+        
+        # Check if user has connected pages
+        integration_result = supabase.table('facebook_integrations').select(
+            'connected_pages, automation_status, automation_completed_at'
+        ).eq('firm_user_id', firm_user_id).execute()
+        
+        if not integration_result.data:
+            return {
+                "success": True,
+                "is_connected": False,
+                "connected_pages": [],
+                "total_connected": 0,
+                "message": "No Facebook integration found"
+            }
+        
+        integration = integration_result.data[0]
+        connected_pages = integration.get('connected_pages', [])
+        automation_status = integration.get('automation_status')
+        
+        # Consider connected if there are connected_pages and status is completed
+        is_connected = (
+            len(connected_pages) > 0 and 
+            automation_status == 'completed'
+        )
+        
+        return {
+            "success": True,
+            "is_connected": is_connected,
+            "connected_pages": connected_pages,
+            "total_connected": len(connected_pages),
+            "automation_status": automation_status,
+            "message": f"Found {len(connected_pages)} connected pages" if is_connected else "No connected pages found"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[FB STATUS] Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/facebook/store-test-pages")
