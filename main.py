@@ -7953,7 +7953,11 @@ async def get_pages_from_integration(request: dict):
         location_id = integration.get('ghl_location_id')
         stored_pages = integration.get('pages')
         
-        # First try to return stored pages
+        # Check if user has completed OAuth (has tokens)
+        if not pit_token or not firebase_token:
+            raise HTTPException(status_code=400, detail="Missing tokens. Please complete Facebook OAuth first.")
+        
+        # If we have tokens, first check if we have stored pages
         if stored_pages and isinstance(stored_pages, list) and len(stored_pages) > 0:
             print(f"[FB PAGES] Using stored pages: {len(stored_pages)} pages found")
             return {
@@ -7963,21 +7967,86 @@ async def get_pages_from_integration(request: dict):
                 "source": "database"
             }
         
-        # If no stored pages, try to fetch from GHL API and store them
-        if not pit_token or not firebase_token:
-            raise HTTPException(status_code=400, detail="Missing tokens and no stored pages. Please complete Facebook OAuth first.")
+        # If no stored pages but we have tokens, fetch from GHL API (first-time or refresh)
             
         print(f"[FB PAGES] No stored pages found, fetching from GHL API using location_id: {location_id}")
         
-        # For now, return empty pages list since the real OAuth hasn't been completed
-        # The user needs to complete the Facebook OAuth flow first before we can fetch pages
-        print(f"[FB PAGES] User has tokens but hasn't completed Facebook OAuth yet")
-        return {
-            "success": False,
-            "message": "Facebook OAuth not completed. Please click 'Log into Facebook' button and complete the OAuth flow first.",
-            "pages": [],
-            "source": "no_oauth"
+        # Call GHL API to get Facebook pages
+        ghl_api_url = f"https://backend.leadconnectorhq.com/integrations/facebook/{location_id}/allPages?limit=20"
+        
+        headers = {
+            "token-id": firebase_token,
+            "channel": "APP",
+            "source": "WEB_USER",
+            "version": "2021-07-28",
+            "accept": "application/json, text/plain, */*",
+            "content-type": "application/json"
         }
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(ghl_api_url, headers=headers)
+            
+            if response.status_code == 200:
+                ghl_pages_data = response.json()
+                print(f"[FB PAGES] GHL API Response: {ghl_pages_data}")
+                
+                # Extract pages array from GHL response
+                ghl_pages = ghl_pages_data.get('pages', [])
+                
+                if not ghl_pages:
+                    return {
+                        "success": False,
+                        "message": "No Facebook pages found for your account",
+                        "pages": [],
+                        "source": "api_empty"
+                    }
+                
+                # Transform GHL format to our expected format for UI consistency
+                transformed_pages = []
+                for ghl_page in ghl_pages:
+                    transformed_page = {
+                        "id": ghl_page.get("facebookPageId", ""),
+                        "name": ghl_page.get("facebookPageName", ""),
+                        "facebookPageId": ghl_page.get("facebookPageId", ""),
+                        "facebookPageName": ghl_page.get("facebookPageName", ""),
+                        "facebookIgnoreMessages": ghl_page.get("facebookIgnoreMessages", False),
+                        "facebookUrl": ghl_page.get("facebookUrl", ""),
+                        "isInstagramAvailable": ghl_page.get("isInstagramAvailable", False)
+                    }
+                    transformed_pages.append(transformed_page)
+                
+                print(f"[FB PAGES] Successfully retrieved {len(transformed_pages)} pages from GHL API")
+                
+                # Store the pages in database for future use
+                try:
+                    supabase.table('facebook_integrations').update({
+                        'pages': transformed_pages,
+                        'updated_at': datetime.now().isoformat()
+                    }).eq('firm_user_id', firm_user_id).execute()
+                    print(f"[FB PAGES] Stored {len(transformed_pages)} pages in database")
+                except Exception as e:
+                    print(f"[FB PAGES] Warning: Could not store pages in database: {e}")
+                
+                return {
+                    "success": True,
+                    "pages": transformed_pages,
+                    "message": f"Found {len(transformed_pages)} Facebook pages (from GHL API)",
+                    "source": "api"
+                }
+            else:
+                error_text = response.text
+                print(f"[FB PAGES] GHL API error: {response.status_code} - {error_text}")
+                
+                # If 404, likely means no Facebook pages connected yet
+                if response.status_code == 404:
+                    return {
+                        "success": False,
+                        "message": "No Facebook pages found. Please complete Facebook OAuth first or connect pages in GoHighLevel.",
+                        "pages": [],
+                        "source": "api_404"
+                    }
+                else:
+                    raise HTTPException(status_code=response.status_code, detail=f"GHL API error: {error_text}")
                 
     except HTTPException:
         raise
@@ -8002,9 +8071,9 @@ async def connect_selected_pages(request: dict):
             
         print(f"[FB CONNECT] Connecting {len(selected_page_ids)} pages for user: {firm_user_id}")
         
-        # Get integration record
+        # Get integration record with stored pages
         integration_result = supabase.table('facebook_integrations').select(
-            'ghl_location_id, pit_token, firebase_token'
+            'ghl_location_id, pit_token, firebase_token, pages'
         ).eq('firm_user_id', firm_user_id).execute()
         
         if not integration_result.data:
@@ -8014,17 +8083,43 @@ async def connect_selected_pages(request: dict):
         pit_token = integration.get('pit_token')
         firebase_token = integration.get('firebase_token') 
         location_id = integration.get('ghl_location_id')
+        stored_pages = integration.get('pages', [])
         
-        # Store selected pages in automation_result
-        selected_pages_data = {
+        # Get full page data for the selected page IDs
+        selected_pages_data = []
+        for page_id in selected_page_ids:
+            # Find the page data from stored pages
+            page_data = None
+            for stored_page in stored_pages:
+                if (stored_page.get('id') == page_id or 
+                    stored_page.get('facebookPageId') == page_id):
+                    page_data = stored_page
+                    break
+            
+            if page_data:
+                selected_pages_data.append(page_data)
+            else:
+                # If page data not found, create basic structure
+                selected_pages_data.append({
+                    "id": page_id,
+                    "facebookPageId": page_id,
+                    "name": f"Page {page_id}",
+                    "facebookPageName": f"Page {page_id}",
+                    "selected_at": datetime.now().isoformat()
+                })
+        
+        # Store selected pages with full data in automation_result
+        automation_result = {
             "selected_page_ids": selected_page_ids,
+            "selected_pages_data": selected_pages_data,
             "connected_at": datetime.now().isoformat(),
-            "status": "connected"
+            "status": "connected",
+            "total_pages": len(selected_page_ids)
         }
         
         # Update facebook_integrations record
         update_result = supabase.table('facebook_integrations').update({
-            'automation_result': selected_pages_data,
+            'automation_result': automation_result,
             'automation_status': 'completed',
             'automation_completed_at': datetime.now().isoformat(),
             'updated_at': datetime.now().isoformat()
@@ -8038,30 +8133,43 @@ async def connect_selected_pages(request: dict):
         failed_pages = []
         
         if pit_token and firebase_token and location_id:
-            for page_id in selected_page_ids:
-                try:
-                    ghl_api_url = f"https://services.leadconnectorhq.com/locations/{location_id}/integrations/facebook/pages/{page_id}/connect"
+            try:
+                # Use the correct GHL API endpoint for connecting pages
+                ghl_api_url = f"https://backend.leadconnectorhq.com/integrations/facebook/{location_id}/pages"
+                
+                headers = {
+                    "token-id": firebase_token,
+                    "channel": "APP",
+                    "source": "WEB_USER",
+                    "version": "2021-07-28",
+                    "accept": "application/json, text/plain, */*",
+                    "content-type": "application/json"
+                }
+                
+                # Prepare pages payload - send all selected pages at once
+                pages_payload = {
+                    "pages": selected_pages_data
+                }
+                
+                print(f"[FB CONNECT] Connecting {len(selected_pages_data)} pages to GHL...")
+                print(f"[FB CONNECT] API URL: {ghl_api_url}")
+                print(f"[FB CONNECT] Payload: {pages_payload}")
+                
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    response = await client.post(ghl_api_url, headers=headers, json=pages_payload)
                     
-                    headers = {
-                        "Authorization": f"Bearer {pit_token}",
-                        "token-id": firebase_token,
-                        "Version": "2021-04-15",
-                        "Content-Type": "application/json"
-                    }
-                    
-                    async with httpx.AsyncClient(timeout=30.0) as client:
-                        response = await client.post(ghl_api_url, headers=headers, json={})
+                    if response.status_code in [200, 201]:
+                        connected_pages = selected_page_ids
+                        print(f"[FB CONNECT] Successfully connected {len(selected_page_ids)} pages")
+                        print(f"[FB CONNECT] GHL Response: {response.json()}")
+                    else:
+                        failed_pages = selected_page_ids
+                        print(f"[FB CONNECT] Failed to connect pages: {response.status_code}")
+                        print(f"[FB CONNECT] Error: {response.text}")
                         
-                        if response.status_code == 200:
-                            connected_pages.append(page_id)
-                            print(f"[FB CONNECT] Successfully connected page: {page_id}")
-                        else:
-                            failed_pages.append(page_id)
-                            print(f"[FB CONNECT] Failed to connect page {page_id}: {response.status_code}")
-                            
-                except Exception as e:
-                    failed_pages.append(page_id)
-                    print(f"[FB CONNECT] Error connecting page {page_id}: {e}")
+            except Exception as e:
+                failed_pages = selected_page_ids
+                print(f"[FB CONNECT] Error connecting pages: {e}")
         
         return {
             "success": True,
