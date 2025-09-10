@@ -8866,6 +8866,123 @@ async def get_facebook_unlock_status(firm_user_id: str):
         print(f"Error checking Facebook unlock status: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/api/facebook/retry-token-capture")
+async def retry_facebook_token_capture(request: dict, background_tasks: BackgroundTasks):
+    """
+    Retry Facebook token capture using ghl_automation_for_retry.py
+    Updates facebook_integrations table with access_token, firebase_token, and expires_at
+    """
+    try:
+        firm_user_id = request.get('firm_user_id')
+        
+        if not firm_user_id:
+            raise HTTPException(status_code=400, detail="firm_user_id is required")
+        
+        print(f"[RETRY] Starting token capture retry for firm_user_id: {firm_user_id}")
+        
+        # Check if facebook_integrations record exists
+        integration_result = supabase.table('facebook_integrations').select(
+            'id, firm_user_id, ghl_location_id, automation_status'
+        ).eq('firm_user_id', firm_user_id).execute()
+        
+        if not integration_result.data:
+            raise HTTPException(
+                status_code=404, 
+                detail="No Facebook integration record found. Please complete initial setup first."
+            )
+        
+        integration = integration_result.data[0]
+        location_id = integration.get('ghl_location_id')
+        
+        if not location_id:
+            # Try to get location_id from ghl_subaccounts
+            ghl_result = supabase.table('ghl_subaccounts').select(
+                'ghl_location_id'
+            ).eq('firm_user_id', firm_user_id).execute()
+            
+            if ghl_result.data:
+                location_id = ghl_result.data[0].get('ghl_location_id')
+            
+            if not location_id:
+                raise HTTPException(
+                    status_code=400, 
+                    detail="No GHL location ID found. Please complete business setup first."
+                )
+        
+        # Update automation status to indicate retry in progress
+        supabase.table('facebook_integrations').update({
+            'automation_status': 'retry_in_progress',
+            'automation_step': 'token_capture_retry',
+            'updated_at': datetime.now().isoformat()
+        }).eq('firm_user_id', firm_user_id).execute()
+        
+        # Start background task for retry automation
+        background_tasks.add_task(
+            run_facebook_retry_automation, 
+            firm_user_id, 
+            location_id
+        )
+        
+        return {
+            "success": True,
+            "message": "Token capture retry started in background",
+            "firm_user_id": firm_user_id,
+            "location_id": location_id,
+            "status": "retry_in_progress"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[ERROR] Retry token capture failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+async def run_facebook_retry_automation(firm_user_id: str, location_id: str):
+    """Background task to run the retry automation script"""
+    try:
+        print(f"[RETRY AUTOMATION] Starting for firm_user_id: {firm_user_id}, location_id: {location_id}")
+        
+        # Import the retry automation class
+        from ghl_automation_for_retry import HighLevelRetryAutomation
+        
+        # Run the retry automation
+        automation = HighLevelRetryAutomation(headless=True)  # Headless for background execution
+        success = await automation.run_retry_automation("", "", location_id, firm_user_id)
+        
+        # Update automation status based on result
+        if success:
+            supabase.table('facebook_integrations').update({
+                'automation_status': 'retry_completed',
+                'automation_step': 'token_capture_completed',
+                'automation_completed_at': datetime.now().isoformat(),
+                'updated_at': datetime.now().isoformat()
+            }).eq('firm_user_id', firm_user_id).execute()
+            
+            print(f"[RETRY AUTOMATION] ✅ Successfully completed token capture for: {firm_user_id}")
+        else:
+            supabase.table('facebook_integrations').update({
+                'automation_status': 'retry_failed',
+                'automation_step': 'token_capture_failed', 
+                'automation_error': 'Token capture retry failed',
+                'updated_at': datetime.now().isoformat()
+            }).eq('firm_user_id', firm_user_id).execute()
+            
+            print(f"[RETRY AUTOMATION] ❌ Token capture failed for: {firm_user_id}")
+            
+    except Exception as e:
+        print(f"[RETRY AUTOMATION] ❌ Exception in retry automation: {e}")
+        
+        # Update status to indicate error
+        try:
+            supabase.table('facebook_integrations').update({
+                'automation_status': 'retry_error',
+                'automation_step': 'automation_exception',
+                'automation_error': str(e),
+                'updated_at': datetime.now().isoformat()
+            }).eq('firm_user_id', firm_user_id).execute()
+        except Exception as db_error:
+            print(f"[RETRY AUTOMATION] Failed to update error status in database: {db_error}")
+
 @app.post("/api/business/setup", response_model=BusinessSetupResponse)
 async def setup_business_complete(request: BusinessInformationRequest, background_tasks: BackgroundTasks):
     """
