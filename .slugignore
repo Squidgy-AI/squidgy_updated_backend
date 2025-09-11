@@ -55,3 +55,25 @@ venv/
 env/
 ENV/
 virtual_back/
+
+# Database files (not needed in production)
+Database/
+*.sql
+
+# Additional heavy requirements files (use optimized version)
+requirements.txt
+requirements-prod.txt
+requirements_free_embeddings.txt
+
+# Development and testing automation scripts
+*_automation_complete_playwright.py
+ghl_automation_for_retry.py
+facebook_pages_api_working.py
+
+# Buildpack-related files that aren't needed after build
+heroku_buildpacks.txt
+runtime_1.txt
+
+# Checkpoint and documentation files
+*_CHECKPOINT.md
+FACEBOOK_OAUTH_CHECKPOINT.md

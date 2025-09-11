@@ -25,6 +25,14 @@
       "OPENAI_API_KEY": {
         "description": "OpenAI API key",
         "required": true
+      },
+      "PLAYWRIGHT_BUILDPACK_BROWSERS": {
+        "description": "Only install Chromium browser to reduce slug size",
+        "value": "chromium"
+      },
+      "PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD": {
+        "description": "Skip browser download during pip install",
+        "value": "1"
       }
     }
   }
