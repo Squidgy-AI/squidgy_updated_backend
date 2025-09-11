@@ -25,13 +25,12 @@ from pydantic import BaseModel
 from supabase import create_client, Client
 from PIL import Image
 
-# Local imports
-from agent_config import get_agent_config, AGENTS
-from Website.web_scrape import capture_website_screenshot, get_website_favicon_async
-from tools_connector import tools
-from safe_agent_selector import SafeAgentSelector, safe_agent_selection_endpoint
-from solar_api_connector import SolarApiConnector, SolarInsightsRequest as SolarInsightsReq, SolarDataLayersRequest as SolarDataLayersReq, get_solar_analysis_for_agent
-from email_validation import verify_email_confirmed, require_email_confirmed, check_email_confirmation_status
+# Local imports (commented out missing modules)
+# from Website.web_scrape import capture_website_screenshot, get_website_favicon_async
+# from tools_connector import tools
+# from safe_agent_selector import SafeAgentSelector, safe_agent_selection_endpoint
+# from solar_api_connector import SolarApiConnector, SolarInsightsRequest as SolarInsightsReq, SolarDataLayersRequest as SolarDataLayersReq, get_solar_analysis_for_agent
+# from email_validation import verify_email_confirmed, require_email_confirmed, check_email_confirmation_status
 from invitation_handler import InvitationHandler
 
 # Handler classes
@@ -814,15 +813,16 @@ class DynamicAgentKBHandler:
     async def get_agent_context_from_kb(self, agent_name: str) -> Dict[str, Any]:
         """Get agent context and knowledge base information"""
         try:
-            # Get agent configuration from agent_config.py
-            from agent_config import get_agent_config
-            agent_config = get_agent_config(agent_name)
+            # Default agent configuration
+            agent_config = {
+                'description': f"General purpose {agent_name} agent",
+                'model': 'gpt-4',
+                'temperature': 0.7
+            }
             
-            if not agent_config:
-                logger.warning(f"No configuration found for agent: {agent_name}")
-                return {
-                    'agent_name': agent_name,
-                    'description': f"General purpose {agent_name} agent",
+            return {
+                'agent_name': agent_name,
+                'description': agent_config.get('description', f"General purpose {agent_name} agent"),
                     'must_questions': [],
                     'tools': [],
                     'system_prompt': f"You are {agent_name}, a helpful AI assistant."
@@ -1058,9 +1058,6 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 N8N_MAIN = os.getenv("N8N_MAIN", "https://n8n.theaiteam.uk/webhook/c2fcbad6-abc0-43af-8aa8-d1661ff4461d")
 N8N_MAIN_TEST = os.getenv("N8N_MAIN_TEST")
 
-N8N_STREAM_TEST = os.getenv("N8N_STREAM_TEST")
-N8N_STREAM_TEST_TEST = os.getenv("N8N_STREAM_TEST_TEST")
-
 
 print(f"Using Supabase URL: {SUPABASE_URL}")
 
@@ -1107,8 +1104,7 @@ running_tasks: Dict[str, Dict[str, Any]] = {}
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 AGENT_DESCRIPTIONS = {
-    agent_name: agent_config.description 
-    for agent_name, agent_config in AGENTS.items()
+    "PersonalAssistant": "Personal Assistant Agent"
 }
 
 
@@ -3172,16 +3168,17 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str, session_id: str
 async def get_all_agent_configs():
     """Get all agent configurations"""
     return {
-        "agents": [agent.model_dump() for agent in AGENTS.values()]
+        "agents": [{"name": "PersonalAssistant", "description": "Personal Assistant Agent"}]
     }
 
 @app.get("/api/agents/config/{agent_name}")
 async def get_agent_config_endpoint(agent_name: str):
     """Get specific agent configuration"""
-    agent = get_agent_config(agent_name)
-    if not agent:
+    if agent_name == "PersonalAssistant":
+        agent = {"name": "PersonalAssistant", "description": "Personal Assistant Agent"}
+    else:
         raise HTTPException(status_code=404, detail=f"Agent {agent_name} not found")
-    return agent.model_dump()
+    return agent
 
 def extract_image_urls(text: str) -> List[str]:
     """Extract Supabase storage URLs from text"""
