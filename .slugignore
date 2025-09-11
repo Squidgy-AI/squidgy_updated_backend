@@ -60,8 +60,7 @@ virtual_back/
 Database/
 *.sql
 
-# Additional heavy requirements files (use optimized version)
-requirements.txt
+# Additional heavy requirements files (keep requirements.txt for Heroku)
 requirements-prod.txt
 requirements_free_embeddings.txt
 
