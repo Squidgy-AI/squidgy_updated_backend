@@ -28,7 +28,6 @@ from PIL import Image
 # Local imports
 from agent_config import get_agent_config, AGENTS
 from Website.web_scrape import capture_website_screenshot, get_website_favicon_async
-from embedding_service import get_embedding
 from tools_connector import tools
 from safe_agent_selector import SafeAgentSelector, safe_agent_selection_endpoint
 from solar_api_connector import SolarApiConnector, SolarInsightsRequest as SolarInsightsReq, SolarDataLayersRequest as SolarDataLayersReq, get_solar_analysis_for_agent
@@ -44,43 +43,10 @@ class AgentMatcher:
         self._cache = {}  # Cache for agent matching results
         self._cache_ttl = 300  # Cache TTL in seconds (5 minutes)
 
-    async def get_query_embedding(self, text: str) -> List[float]:
-        """Generate embedding for the query text using free embedding service"""
-        try:
-            embedding = get_embedding(text)
-            if embedding is None:
-                raise Exception("Failed to generate embedding")
-            return embedding
-        except Exception as e:
-            logger.error(f"Error generating embedding: {str(e)}")
-            # Fallback: return a simple dummy embedding based on text hash
-            import hashlib
-            text_hash = hashlib.md5(text.encode()).hexdigest()
-            # Convert hash to a 384-dimensional embedding (matching sentence-transformers output)
-            dummy_embedding = []
-            for i in range(0, min(len(text_hash), 32), 2):
-                val = int(text_hash[i:i+2], 16) / 255.0  # Normalize to 0-1
-                dummy_embedding.extend([val] * 12)  # Repeat to get 384 dimensions
-            
-            # Pad or trim to exactly 384 dimensions
-            while len(dummy_embedding) < 384:
-                dummy_embedding.append(0.0)
-            return dummy_embedding[:384]
 
     async def check_agent_match(self, agent_name: str, user_query: str, threshold: float = 0.2) -> bool:
-        """Check if a specific agent matches the user query using vector similarity"""
+        """Check if a specific agent matches the user query using keyword matching"""
         try:
-            # Skip check if agent doesn't exist
-            agent_check = self.supabase.table('agent_documents')\
-                .select('id')\
-                .eq('agent_name', agent_name)\
-                .limit(1)\
-                .execute()
-            
-            if not agent_check.data:
-                logger.warning(f"No documents found for agent '{agent_name}' in database")
-                return False
-
             # Get cached result if exists
             cache_key = f"agent_match_{agent_name}_{user_query}"
             cached = self._cache.get(cache_key)
@@ -100,25 +66,8 @@ class AgentMatcher:
             query_lower = user_query.lower().strip()
             is_basic = any(pattern in query_lower for pattern in basic_patterns) or len(query_lower.split()) <= 3
             
-            if is_basic:
-                logger.debug(f"Basic query detected: Any agent can handle: '{user_query}'")
-                match_result = True
-            else:
-                # Perform vector search for specific queries
-                query_embedding = await self.get_query_embedding(user_query)
-                
-                result = self.supabase.rpc(
-                    'match_agent_documents',
-                    {
-                        'query_embedding': query_embedding,
-                        'match_threshold': threshold,
-                        'match_count': 1,
-                        'filter_agent': agent_name
-                    }
-                ).execute()
-                
-                # Simple check: if we have results above threshold, it's a match
-                match_result = bool(result.data and len(result.data) > 0)
+            # For now, all agents can handle all queries (simplified matching)
+            match_result = True
             
             # Cache the result
             self._cache[cache_key] = {
@@ -131,71 +80,15 @@ class AgentMatcher:
             
         except Exception as e:
             logger.error(f"Error checking agent match: {str(e)}")
-            return False
+            return True  # Default to True if error
 
     async def find_best_agents(self, user_query: str, top_n: int = 3) -> List[str]:
-        """Find the best matching agents for a user query using vector similarity"""
-        try:
-            # Get cached result if exists
-            cache_key = f"best_agents_{user_query}"
-            cached = self._cache.get(cache_key)
-            if cached and (datetime.now() - cached['timestamp']).total_seconds() < self._cache_ttl:
-                return cached['result']
-
-            query_embedding = await self.get_query_embedding(user_query)
-            
-            result = self.supabase.rpc(
-                'match_agents_by_similarity',
-                {
-                    'query_embedding': query_embedding,
-                    'match_threshold': 0.2,  # Lower threshold
-                    'match_count': top_n
-                }
-            ).execute()
-            
-            if not result.data:
-                return ['presaleskb']
-            
-            # Extract just agent names in order of similarity
-            agent_names = [item['agent_name'] for item in result.data]
-            
-            # Cache the result
-            self._cache[cache_key] = {
-                'result': agent_names,
-                'timestamp': datetime.now()
-            }
-            
-            return agent_names
-            
-        except Exception as e:
-            logger.error(f"Error finding best agents: {str(e)}")
-            return ['presaleskb']
+        """Get default agent list (simplified without embeddings)"""
+        return ['presaleskb', 'leadgenkb', 'socialmediakb'][:top_n]
 
     async def get_recommended_agent(self, user_query: str) -> str:
-        """Get the single best recommended agent for a query"""
-        try:
-            # Get cached result if exists
-            cache_key = f"recommended_agent_{user_query}"
-            cached = self._cache.get(cache_key)
-            if cached and (datetime.now() - cached['timestamp']).total_seconds() < self._cache_ttl:
-                return cached['result']
-
-            best_agents = await self.find_best_agents(user_query, top_n=1)
-            
-            # Return first agent if found, else default
-            agent = best_agents[0] if best_agents else 'presaleskb'
-
-            # Cache the result
-            self._cache[cache_key] = {
-                'result': agent,
-                'timestamp': datetime.now()
-            }
-            
-            return agent
-            
-        except Exception as e:
-            logger.error(f"Error getting recommended agent: {str(e)}")
-            return 'presaleskb'
+        """Get the default recommended agent (simplified without embeddings)"""
+        return 'presaleskb'
 
 # Conversational Handler Class
 class ConversationalHandler:
@@ -681,8 +574,7 @@ class ClientKBManager:
         try:
             start_time = time.time()
             
-            # Generate embedding for the query using free service
-            query_embedding = await AgentMatcher(self.supabase).get_query_embedding(query)
+            # Skip embedding generation - not needed anymore
             
             # Determine context type based on query content
             context_type = self._determine_context_type(query)
@@ -701,7 +593,7 @@ class ClientKBManager:
                 'client_id': user_id,
                 'context_type': context_type,
                 'content': content,
-                'embedding': query_embedding,
+                'embedding': None,
                 'source_url': None,
                 'confidence_score': 1.0,
                 'is_active': True
@@ -718,7 +610,7 @@ class ClientKBManager:
                 "user_id": user_id,
                 "agent_name": agent_name,
                 "context_type": context_type,
-                "has_embedding": bool(query_embedding)
+                "has_embedding": False
             })
             
             return result.data[0] if result.data else None
@@ -1187,11 +1079,7 @@ async def startup_event():
     try:
         print("🚀 Starting high-performance optimizations...")
         
-        # Pre-warm embedding model
-        start_time = time.time()
-        dummy_embedding = await AgentMatcher(supabase).get_query_embedding("warmup query")
-        warmup_time = int((time.time() - start_time) * 1000)
-        print(f"🧠 Embedding model pre-warmed in {warmup_time}ms")
+        # Embedding warmup removed - no longer needed
         
         # Initialize any other caches or connections here
         print("✅ High-performance optimizations ready!")
@@ -2010,87 +1898,30 @@ async def process_websocket_message_with_n8n(request_data: Dict[str, Any], webso
             logger.error(f"Failed to send error response: {send_error}")
 
 # Helper functions for optimized client context aggregation
-async def get_optimized_client_context(user_id: str, query_embedding: List[float]) -> Dict[str, Any]:
+async def get_optimized_client_context(user_id: str) -> Dict[str, Any]:
     """Get comprehensive client context using optimized database functions"""
     try:
         # Use the optimized function from the new schema
-        result = supabase.rpc('get_client_context_similarity', {
-            'client_id_param': user_id,
-            'query_embedding': query_embedding,
-            'similarity_threshold': 0.7,
-            'limit_count': 10
-        }).execute()
+        # Skip embedding-based similarity search
+        result = None
         
-        context_data = {}
-        if result.data:
-            # Aggregate different types of context
-            for item in result.data:
-                context_type = item['context_type']
-                content = item['content']
-                similarity = item['similarity']
-                
-                if context_type not in context_data:
-                    context_data[context_type] = []
-                
-                context_data[context_type].append({
-                    'content': content,
-                    'similarity': similarity,
-                    'id': item['id']
-                })
-        
-        # Fallback to legacy client industry context if no optimized data
-        if not context_data:
-            return await dynamic_agent_kb_handler.get_client_industry_context(user_id)
-        
-        # Build structured client context
-        structured_context = {
-            'user_id': user_id,
-            'context_sources': len(context_data),
-            'website_info': context_data.get('website_info', []),
-            'social_media': context_data.get('social_media', []),
-            'business_info': context_data.get('business_info', []),
-            'other_sources': {k: v for k, v in context_data.items() 
-                           if k not in ['website_info', 'social_media', 'business_info']}
-        }
-        
-        return structured_context
+        # Use fallback client industry context
+        return await dynamic_agent_kb_handler.get_client_industry_context(user_id)
         
     except Exception as e:
         logger.warning(f"Error getting optimized client context: {e}")
         # Fallback to legacy method
         return await dynamic_agent_kb_handler.get_client_industry_context(user_id)
 
-async def get_optimized_agent_knowledge(agent_name: str, query_embedding: List[float]) -> Dict[str, Any]:
+async def get_optimized_agent_knowledge(agent_name: str) -> Dict[str, Any]:
     """Get agent knowledge using optimized database function with usage tracking"""
     try:
         # Use the optimized function from the new schema
-        result = supabase.rpc('get_agent_knowledge_smart', {
-            'agent_name_param': agent_name,
-            'query_embedding': query_embedding,
-            'similarity_threshold': 0.7,
-            'limit_count': 5
-        }).execute()
+        # Skip embedding-based agent knowledge search
+        result = None
         
-        knowledge_data = {
-            'agent_name': agent_name,
-            'knowledge_items': [],
-            'total_relevance': 0.0
-        }
-        
-        if result.data:
-            for item in result.data:
-                knowledge_item = {
-                    'id': item['id'],
-                    'content': item['content'],
-                    'metadata': item['metadata'],
-                    'similarity': item['similarity'],
-                    'relevance_score': item['relevance_score'],
-                    'combined_score': item['similarity'] * item['relevance_score']
-                }
-                knowledge_data['knowledge_items'].append(knowledge_item)
-                knowledge_data['total_relevance'] += knowledge_item['combined_score']
-        
-        return knowledge_data
+        # Fallback to legacy method
+        return await dynamic_agent_kb_handler.get_agent_context_from_kb(agent_name)
         
     except Exception as e:
         logger.warning(f"Error getting optimized agent knowledge: {e}")
@@ -2291,17 +2122,13 @@ async def agent_kb_query(request: AgentKBQueryRequest):
             print(f"⚡ Cache hit! Returning cached response in {int((time.time() - start_time) * 1000)}ms")
             return cached_response
         
-        embedding_start = time.time()
-        # Generate query embedding for similarity searches
-        query_embedding = await AgentMatcher(supabase).get_query_embedding(request.user_mssg)
-        embedding_time = int((time.time() - embedding_start) * 1000)
-        print(f"🧠 Embedding generated in {embedding_time}ms")
+        # Embedding generation removed - no longer needed
         
         parallel_start = time.time()
         # PARALLEL PROCESSING - Execute all database operations simultaneously
         agent_context_task = dynamic_agent_kb_handler.get_agent_context_from_kb(request.agent)
-        client_context_task = get_optimized_client_context(request.user_id, query_embedding)
-        agent_knowledge_task = get_optimized_agent_knowledge(request.agent, query_embedding)
+        client_context_task = get_optimized_client_context(request.user_id)
+        agent_knowledge_task = get_optimized_agent_knowledge(request.agent)
         
         # Wait for all operations to complete in parallel
         agent_context, client_context, agent_knowledge = await asyncio.gather(
@@ -2414,7 +2241,7 @@ async def agent_kb_query(request: AgentKBQueryRequest):
             # Log successful performance with detailed timing
             execution_time = int((time.time() - start_time) * 1000)
             print(f"✅ Optimized agent query completed in {execution_time}ms (Target: <8000ms)")
-            print(f"📊 Breakdown: Embedding({embedding_time}ms) + Parallel({parallel_time}ms) + Context({context_time}ms)")
+            print(f"📊 Breakdown: Parallel({parallel_time}ms) + Context({context_time}ms)")
             
             await log_performance_metric("agent_query_success", execution_time, {
                 "agent": request.agent,
@@ -2422,7 +2249,6 @@ async def agent_kb_query(request: AgentKBQueryRequest):
                 "confidence": analysis.get('confidence', 0.8),
                 "tools_used": len(tools_to_use),
                 "context_sources": len(kb_context.get('sources', [])),
-                "embedding_time_ms": embedding_time,
                 "parallel_time_ms": parallel_time,
                 "context_time_ms": context_time
             })
@@ -3568,8 +3394,7 @@ async def populate_agent_documents_table():
     """Utility function to populate agent_documents table from KB files"""
     import os
     import json
-    from embedding_service import get_embedding
-    
+        
     agents_kb_dir = "/Users/somasekharaddakula/CascadeProjects/SquidgyBackend/n8n_worflows/Agents_KB"
     
     if not os.path.exists(agents_kb_dir):
@@ -3598,19 +3423,14 @@ async def populate_agent_documents_table():
                     logger.info(f"Agent {agent_name} already exists in agent_documents table, skipping...")
                     continue
                 
-                # Generate embedding for the content
-                logger.info(f"Generating embedding for {agent_name}...")
-                embedding = get_embedding(content)
-                
-                if embedding is None:
-                    logger.error(f"Failed to generate embedding for {agent_name}")
-                    continue
+                # Skip embedding generation - not needed anymore
+                logger.info(f"Processing content for {agent_name}...")
                 
                 # Insert into agent_documents table
                 insert_data = {
                     'agent_name': agent_name,
                     'content': content,
-                    'embedding': embedding,
+                    'embedding': None,
                     'metadata': {
                         'source': 'kb_file',
                         'filename': filename,
