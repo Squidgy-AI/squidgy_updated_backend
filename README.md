@@ -1,2 +1,2 @@
-# squidgy_updated_backend
-Backend Code base for Updated Backend
+# Squidgy Backend
+Backend Code base for Squidgy - Deployed on Heroku

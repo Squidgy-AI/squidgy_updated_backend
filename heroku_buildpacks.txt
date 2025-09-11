@@ -1,0 +1,4 @@
+# Heroku buildpacks needed for Playwright
+heroku/python
+https://github.com/heroku/heroku-buildpack-apt
+https://github.com/mxschmitt/heroku-buildpack-playwright

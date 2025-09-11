@@ -1,0 +1,30 @@
+{
+    "name": "Squidgy Backend",
+    "description": "Squidgy AI backend API",
+    "repository": "https://github.com/Squidgy-AI/Squidgy_backend_heroku",
+    "keywords": ["python", "fastapi", "ai"],
+    "buildpacks": [
+      {
+        "url": "https://github.com/heroku/heroku-buildpack-apt"
+      },
+      {
+        "url": "heroku/python"
+      },
+      {
+        "url": "https://github.com/Thomas-Boi/heroku-playwright-python-browsers"
+      }
+    ],
+    "addons": [
+      "rediscloud:30"
+    ],
+    "env": {
+      "ENVIRONMENT": {
+        "description": "Application environment",
+        "value": "production"
+      },
+      "OPENAI_API_KEY": {
+        "description": "OpenAI API key",
+        "required": true
+      }
+    }
+  }
