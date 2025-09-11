@@ -1,15 +1,34 @@
 # .slugignore - Exclude files from Heroku slug to reduce size
 
+# DUPLICATE DIRECTORIES - MAJOR SPACE SAVINGS
+# Main.py imports from root level, so Tools/ directory is completely redundant
+Tools/
+
 # Documentation files
 *.md
 README*
 docs/
 HEROKU_DEPLOYMENT_GUIDE.md
+FACEBOOK_OAUTH_CHECKPOINT.md
+LICENSE
 
-# Test files
-tests/
-test_*.py
-*_test.py
+# Database files (not needed in production)
+Database/
+*.sql
+QUICK_DATABASE_SETUP.sql
+SIMPLE_DATABASE_UPDATE.sql
+UPDATE_EXISTING_DATABASE.sql
+business_setup_complete_schema.sql
+facebook_pages_table.sql
+insert_personal_assistant.sql
+monitor_ghl_database.sql
+updated_database_schema.sql
+
+# Development and testing automation scripts (HEAVY FILES)
+*_automation_complete_playwright.py
+ghl_automation_for_retry.py
+facebook_pages_api_working.py
+verify_ghl_registration.py
 
 # Development files
 .git/
@@ -17,10 +36,12 @@ test_*.py
 .env*
 .vscode/
 .idea/
+backend.log
 
-# Log files
-*.log
-logs/
+# Test files
+tests/
+test_*.py
+*_test.py
 
 # Python cache
 __pycache__/
@@ -34,10 +55,7 @@ __pycache__/
 *.temp
 temp/
 
-# Large development scripts that aren't needed in production
-# (Files removed from repository)
-
-# Remove heavy packages from site-packages
+# Heavy packages
 *.whl
 *.tar.gz
 
@@ -56,23 +74,16 @@ env/
 ENV/
 virtual_back/
 
-# Database files (not needed in production)
-Database/
-*.sql
-
 # Additional heavy requirements files (keep requirements.txt for Heroku)
 requirements-prod.txt
 requirements_free_embeddings.txt
-
-# Development and testing automation scripts
-*_automation_complete_playwright.py
-ghl_automation_for_retry.py
-facebook_pages_api_working.py
+requirements_heroku.txt
+requirements_heroku_optimized.txt
 
 # Buildpack-related files that aren't needed after build
 heroku_buildpacks.txt
 runtime_1.txt
+.env.heroku
 
-# Checkpoint and documentation files
-*_CHECKPOINT.md
-FACEBOOK_OAUTH_CHECKPOINT.md
+# Deployment scripts
+deploy_heroku_optimized.sh
