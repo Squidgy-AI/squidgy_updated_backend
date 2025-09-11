@@ -9,9 +9,6 @@
       },
       {
         "url": "heroku/python"
-      },
-      {
-        "url": "https://github.com/mxschmitt/heroku-buildpack-playwright"
       }
     ],
     "addons": [
@@ -25,10 +22,6 @@
       "OPENAI_API_KEY": {
         "description": "OpenAI API key",
         "required": true
-      },
-      "PLAYWRIGHT_BROWSERS_PATH": {
-        "description": "Path for Playwright browsers",
-        "value": "/app/browsers"
       },
       "PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD": {
         "description": "Skip browser download during pip install",
