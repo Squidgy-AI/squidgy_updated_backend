@@ -27,10 +27,6 @@ from PIL import Image
 
 # Local imports
 from Website.web_scrape import capture_website_screenshot, get_website_favicon_async
-# from tools_connector import tools
-# from safe_agent_selector import SafeAgentSelector, safe_agent_selection_endpoint
-# from solar_api_connector import SolarApiConnector, SolarInsightsRequest as SolarInsightsReq, SolarDataLayersRequest as SolarDataLayersReq, get_solar_analysis_for_agent
-# from email_validation import verify_email_confirmed, require_email_confirmed, check_email_confirmation_status
 from invitation_handler import InvitationHandler
 
 # Handler classes
