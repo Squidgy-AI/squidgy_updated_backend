@@ -31,58 +31,7 @@ from invitation_handler import InvitationHandler
 
 # Handler classes
 
-class AgentMatcher:
-    def __init__(self, supabase_client):
-        self.supabase = supabase_client
-        self._cache = {}  # Cache for agent matching results
-        self._cache_ttl = 300  # Cache TTL in seconds (5 minutes)
-
-
-    async def check_agent_match(self, agent_name: str, user_query: str, threshold: float = 0.2) -> bool:
-        """Check if a specific agent matches the user query using keyword matching"""
-        try:
-            # Get cached result if exists
-            cache_key = f"agent_match_{agent_name}_{user_query}"
-            cached = self._cache.get(cache_key)
-            if cached and (datetime.now() - cached['timestamp']).total_seconds() < self._cache_ttl:
-                return cached['result']
-
-            # Check if this is a basic greeting - any agent can handle these
-            basic_patterns = [
-                'hello', 'hi', 'hey', 'good morning', 'good afternoon', 'good evening',
-                'who are you', 'what are you', 'introduce yourself', 'tell me about yourself',
-                'what do you do', 'what can you help with', 'how can you help', 'what services',
-                'greetings', 'salutations', 'yo', 'howdy', 'how are you', 'how do you do',
-                'nice to meet you', 'pleased to meet you', 'what is this', 'explain this',
-                'help', 'assistance', 'support', 'info', 'information', 'thanks', 'thank you'
-            ]
-            
-            query_lower = user_query.lower().strip()
-            is_basic = any(pattern in query_lower for pattern in basic_patterns) or len(query_lower.split()) <= 3
-            
-            # For now, all agents can handle all queries (simplified matching)
-            match_result = True
-            
-            # Cache the result
-            self._cache[cache_key] = {
-                'result': match_result,
-                'timestamp': datetime.now()
-            }
-
-            logger.debug(f"Agent match {agent_name}: {'SUCCESS' if match_result else 'FAILED'}")
-            return match_result
-            
-        except Exception as e:
-            logger.error(f"Error checking agent match: {str(e)}")
-            return True  # Default to True if error
-
-    async def find_best_agents(self, user_query: str, top_n: int = 3) -> List[str]:
-        """Get default agent list (simplified without embeddings)"""
-        return ['presaleskb', 'leadgenkb', 'socialmediakb'][:top_n]
-
-    async def get_recommended_agent(self, user_query: str) -> str:
-        """Get the default recommended agent (simplified without embeddings)"""
-        return 'presaleskb'
+# AgentMatcher class removed - replaced with simple defaults
 
 # Conversational Handler Class
 class ConversationalHandler:
@@ -1084,7 +1033,7 @@ async def startup_event():
 supabase = create_supabase_client()
 
 # Initialize handlers
-agent_matcher = AgentMatcher(supabase_client=supabase)
+# agent_matcher = AgentMatcher(supabase_client=supabase)  # Removed
 conversational_handler = ConversationalHandler(
     supabase_client=supabase,
     n8n_url=os.getenv('N8N_MAIN', 'https://n8n.theaiteam.uk/webhook/c2fcbad6-abc0-43af-8aa8-d1661ff4461d')
@@ -1273,11 +1222,8 @@ async def debug_agent_docs(agent_name: str):
 async def n8n_check_agent_match(request: N8nCheckAgentMatchRequest):
     """N8N webhook endpoint to check if a specific agent matches the user query"""
     try:
-        is_match = await agent_matcher.check_agent_match(
-            agent_name=request.agent_name,
-            user_query=request.user_query,
-            threshold=request.threshold
-        )
+        # Default to True since AgentMatcher is removed
+        is_match = True
         
         # Debug logging
         logger.debug(f"Agent Match Check - Agent: {request.agent_name}, Query: {request.user_query}, Result: {is_match}")
@@ -1305,10 +1251,8 @@ async def n8n_check_agent_match(request: N8nCheckAgentMatchRequest):
 async def n8n_find_best_agents(request: N8nFindBestAgentsRequest):
     """N8N webhook endpoint to find the best matching agents for a user query"""
     try:
-        best_agents = await agent_matcher.find_best_agents(
-            user_query=request.user_query,
-            top_n=request.top_n
-        )
+        # Default agent list since AgentMatcher is removed
+        best_agents = ['presaleskb', 'leadgenkb', 'socialmediakb'][:request.top_n]
         
         recommendations = []
         for idx, agent_name in enumerate(best_agents):
@@ -1364,7 +1308,8 @@ async def n8n_analyze_agent_query(request: Dict[str, Any]):
         }
         
         if current_agent:
-            is_match = await agent_matcher.check_agent_match(current_agent, user_query)
+            # Default to True since AgentMatcher is removed
+            is_match = True
             response["current_agent_analysis"] = {
                 "agent_name": current_agent,
                 "is_suitable": is_match,
@@ -1372,7 +1317,8 @@ async def n8n_analyze_agent_query(request: Dict[str, Any]):
             }
         
         if get_recommendations:
-            best_agents = await agent_matcher.find_best_agents(user_query, top_n)
+            # Default agent list since AgentMatcher is removed
+            best_agents = ['presaleskb', 'leadgenkb', 'socialmediakb'][:top_n]
             
             response["recommended_agents"] = [
                 {
@@ -1409,31 +1355,7 @@ async def n8n_analyze_agent_query(request: Dict[str, Any]):
             "suggested_agent": "presaleskb"
         }
 
-@app.get("/n8n/agent_matcher/health")
-async def n8n_agent_matcher_health():
-    """Health check for agent matching service"""
-    try:
-        agent_matcher.supabase.table('agent_documents').select('id').limit(1).execute()
-        
-        return {
-            "service": "agent_matcher",
-            "status": "healthy",
-            "database": "connected",
-            "endpoints": [
-                "/n8n/check_agent_match",
-                "/n8n/find_best_agents", 
-                "/n8n/analyze_agent_query",
-# "/n8n/safe_agent_select" - removed
-            ],
-            "timestamp": datetime.now().isoformat()
-        }
-    except Exception as e:
-        return {
-            "service": "agent_matcher",
-            "status": "unhealthy",
-            "error": str(e),
-            "timestamp": datetime.now().isoformat()
-        }
+# Agent matcher health endpoint removed - AgentMatcher class removed
 
 # Safe agent selection endpoint removed - safe_agent_selector dependency removed
 
