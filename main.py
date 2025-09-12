@@ -25,8 +25,8 @@ from pydantic import BaseModel
 from supabase import create_client, Client
 from PIL import Image
 
-# Local imports (commented out missing modules)
-# from Website.web_scrape import capture_website_screenshot, get_website_favicon_async
+# Local imports
+from Website.web_scrape import capture_website_screenshot, get_website_favicon_async
 # from tools_connector import tools
 # from safe_agent_selector import SafeAgentSelector, safe_agent_selection_endpoint
 # from solar_api_connector import SolarApiConnector, SolarInsightsRequest as SolarInsightsReq, SolarDataLayersRequest as SolarDataLayersReq, get_solar_analysis_for_agent
@@ -1201,19 +1201,7 @@ class WebsiteScreenshotRequest(BaseModel):
     session_id: Optional[str] = None
     user_id: Optional[str] = None
 
-# Solar API Models
-class SolarInsightsRequest(BaseModel):
-    address: str
-    monthly_electric_bill: Optional[float] = None
-    monthly_electric_usage_kwh: Optional[float] = None
-    mode: Optional[str] = "summary"  # "full", "summary", "solarResults"
-    demo: Optional[bool] = False
-
-class SolarDataLayersRequest(BaseModel):
-    address: str
-    render_panels: Optional[bool] = True
-    file_format: Optional[str] = "jpeg"
-    demo: Optional[bool] = False
+# Solar API Models removed - solar_api_connector dependency removed
 
 # Conversational Handler Class
 # API Endpoints
@@ -1229,19 +1217,7 @@ async def health_check_detailed():
         "streaming_sessions": len(streaming_sessions)
     }
 
-@app.get("/api/user/email-status/{user_id}")
-async def get_email_confirmation_status(user_id: str):
-    """Check if user's email is confirmed"""
-    try:
-        status = await check_email_confirmation_status(supabase, user_id)
-        return status
-    except Exception as e:
-        logger.error(f"Error checking email status for user {user_id}: {str(e)}")
-        return {
-            "status": "error",
-            "message": str(e),
-            "email_confirmed": False
-        }
+# Email validation endpoint removed - email_validation dependency removed
 
 @app.get("/debug/agent-docs/{agent_name}")
 async def debug_agent_docs(agent_name: str):
@@ -1451,7 +1427,7 @@ async def n8n_agent_matcher_health():
                 "/n8n/check_agent_match",
                 "/n8n/find_best_agents", 
                 "/n8n/analyze_agent_query",
-                "/n8n/safe_agent_select"
+# "/n8n/safe_agent_select" - removed
             ],
             "timestamp": datetime.now().isoformat()
         }
@@ -1463,20 +1439,7 @@ async def n8n_agent_matcher_health():
             "timestamp": datetime.now().isoformat()
         }
 
-@app.post("/n8n/safe_agent_select")
-async def n8n_safe_agent_select(request: Dict[str, Any]):
-    """Safe agent selection with loop prevention and comprehensive fallbacks"""
-    try:
-        return await safe_agent_selection_endpoint(request, supabase, agent_matcher)
-    except Exception as e:
-        logger.error(f"❌ Safe agent selection endpoint error: {str(e)}")
-        return {
-            "selected_agent": "presaleskb",
-            "strategy_used": "error_fallback",
-            "confidence_score": 0.1,
-            "error": str(e),
-            "success": False
-        }
+# Safe agent selection endpoint removed - safe_agent_selector dependency removed
 
 # Client KB endpoints
 @app.post("/n8n/client/check_kb")
@@ -2396,14 +2359,7 @@ async def n8n_main_request(request: N8nMainRequest, agent_name: str, session_id:
         # Generate a unique request ID
         request_id = request.request_id or str(uuid.uuid4())
         
-        # Verify email confirmation before processing chat
-        if request.user_id and not await verify_email_confirmed(supabase, request.user_id):
-            return {
-                "status": "error",
-                "message": "Email confirmation required. Please check your email and click the confirmation link.",
-                "request_id": request_id,
-                "requires_email_confirmation": True
-            }
+        # Email verification removed - email_validation dependency removed
         
         request.agent_name = agent_name
         request.session_id = session_id
@@ -3025,15 +2981,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str, session_id: str
     
     await websocket.accept()
     
-    # Verify email confirmation before allowing WebSocket connection
-    if not await verify_email_confirmed(supabase, user_id):
-        await websocket.send_json({
-            "type": "error",
-            "message": "Email confirmation required. Please check your email and click the confirmation link.",
-            "requires_email_confirmation": True
-        })
-        await websocket.close()
-        return
+    # Email verification removed - email_validation dependency removed
     
     active_connections[connection_id] = websocket
     
@@ -4211,41 +4159,13 @@ async def email_confirmation_page():
 # TOOL ENDPOINTS - Organized Tools Integration
 # =============================================================================
 
-@app.get("/api/solar/insights")
-async def solar_insights_endpoint(address: str):
-    """Get solar insights for an address using RealWave API"""
-    try:
-        result = tools.get_solar_insights(address)
-        return result
-    except Exception as e:
-        logger.error(f"Error in solar insights endpoint: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/api/solar/data-layers")
-async def solar_data_layers_endpoint(address: str):
-    """Get solar data layers for visualization"""
-    try:
-        result = tools.get_solar_data_layers(address)
-        return result
-    except Exception as e:
-        logger.error(f"Error in solar data layers endpoint: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/api/solar/report")
-async def solar_report_endpoint(address: str):
-    """Generate comprehensive solar report"""
-    try:
-        result = tools.generate_solar_report(address)
-        return result
-    except Exception as e:
-        logger.error(f"Error in solar report endpoint: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+# Solar endpoints removed - tools_connector dependency removed
 
 @app.get("/api/website/screenshot")
 async def website_screenshot_endpoint(url: str, session_id: str = None):
     """Capture website screenshot"""
     try:
-        result = await tools.capture_website_screenshot_async(url, session_id)
+        result = await capture_website_screenshot(url, session_id)
         return result
     except Exception as e:
         logger.error(f"Error in website screenshot endpoint: {str(e)}")
@@ -4255,45 +4175,13 @@ async def website_screenshot_endpoint(url: str, session_id: str = None):
 async def website_favicon_endpoint(url: str, session_id: str = None):
     """Get website favicon"""
     try:
-        result = await tools.get_website_favicon_async(url, session_id)
+        result = await get_website_favicon_async(url, session_id)
         return result
     except Exception as e:
         logger.error(f"Error in website favicon endpoint: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/api/ghl/contact")
-async def create_contact_endpoint(
-    first_name: str,
-    last_name: str, 
-    email: str,
-    phone: str,
-    location_id: str = None,
-    company_name: str = None
-):
-    """Create a new contact in GoHighLevel"""
-    try:
-        result = tools.create_contact(
-            first_name=first_name,
-            last_name=last_name,
-            email=email,
-            phone=phone,
-            location_id=location_id,
-            company_name=company_name
-        )
-        return result
-    except Exception as e:
-        logger.error(f"Error in create contact endpoint: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/api/ghl/contact/{contact_id}")
-async def get_contact_endpoint(contact_id: str, location_id: str = None):
-    """Get contact details from GoHighLevel"""
-    try:
-        result = tools.get_contact(contact_id, location_id)
-        return result
-    except Exception as e:
-        logger.error(f"Error in get contact endpoint: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+# GHL contact endpoints removed - tools_connector dependency removed
 
 # =============================================================================
 # AGENT BUSINESS SETUP ENDPOINTS
