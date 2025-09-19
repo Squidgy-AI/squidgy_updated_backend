@@ -3396,7 +3396,7 @@ async def create_subaccount_and_user(request: GHLSubAccountRequest):
             "websites.write",
             "wordpress.read",
             "wordpress.write",
-            "workflows.write"
+            "workflows.readonly"
         ]
         
         # SKIP business user creation to avoid "user already exists" errors
@@ -3729,7 +3729,7 @@ async def run_ghl_creation_background(
             "socialplanner/tag.write", "socialplanner/twitter.readonly", "socialplanner/watermarks.readonly",
             "socialplanner/watermarks.write", "surveys.write", "triggers.write", "voice-ai-agent-goals.readonly",
             "voice-ai-agent-goals.write", "voice-ai-agents.write", "voice-ai-dashboard.readonly",
-            "websites.write", "wordpress.read", "wordpress.write", "workflows.write"
+            "websites.write", "wordpress.read", "wordpress.write", "workflows.readonly"
         ]
         
         # Add delay for location propagation

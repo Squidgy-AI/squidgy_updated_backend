@@ -99,7 +99,7 @@ def update_user(
         scopes = [
             "campaigns.readonly", "campaigns.write", "calendars/events.write",
             "calendars/events.readonly", "contacts.write", "contacts/bulkActions.write",
-            "workflows.readonly", "workflows.write", "triggers.write", "funnels.write",
+            "workflows.readonly", "triggers.write", "funnels.write",
             "websites.write", "opportunities.write", "opportunities/leadValue.readonly",
             "reporting/phone.readonly", "reporting/adwords.readonly",
             "reporting/facebookAds.readonly", "reporting/attributions.readonly",
