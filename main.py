@@ -3328,11 +3328,6 @@ async def create_subaccount_and_user(request: GHLSubAccountRequest):
             "opportunities.write",
             "opportunities/bulkActions.write",
             "opportunities/leadValue.readonly",
-            "payments.write",
-            "payments/exports.write",
-            "payments/records.write",
-            "payments/refunds.write",
-            "payments/subscriptionsCancel.write",
             "prospecting.readonly",
             "prospecting.write",
             "prospecting/auditReport.write",
@@ -3738,11 +3733,6 @@ async def run_ghl_creation_background(
             "opportunities.write",
             "opportunities/bulkActions.write",
             "opportunities/leadValue.readonly",
-            "payments.write",
-            "payments/exports.write",
-            "payments/records.write",
-            "payments/refunds.write",
-            "payments/subscriptionsCancel.write",
             "prospecting.readonly",
             "prospecting.write",
             "prospecting/auditReport.write",
@@ -3822,7 +3812,7 @@ async def run_ghl_creation_background(
             phone="+17166044029",
             role="admin",
             permissions=full_permissions,
-            scopes=None  # TEST: Remove all scopes to see if user creation works
+            scopes=location_scopes
         )
         
         if soma_user_response.get("status") != "success":
