@@ -3329,10 +3329,9 @@ async def create_subaccount_and_user(request: GHLSubAccountRequest):
             "opportunities/bulkActions.write",
             "opportunities/leadValue.readonly",
             "payments.write",
-            "payments/exports.write",
             "payments/records.write",
-            "payments/refunds.write",
-            "payments/subscriptionsCancel.write",
+            "payments/transactions.refund",
+            "payments/subscriptions.pauseResumeCancel",
             "prospecting.readonly",
             "prospecting.write",
             "prospecting/auditReport.write",
@@ -3396,7 +3395,7 @@ async def create_subaccount_and_user(request: GHLSubAccountRequest):
             "websites.write",
             "wordpress.read",
             "wordpress.write",
-            "workflows.readonly"
+            "workflows.write"
         ]
         
         # SKIP business user creation to avoid "user already exists" errors
@@ -3708,8 +3707,8 @@ async def run_ghl_creation_background(
             "locations/tags.write", "marketing.write", "marketing/affiliate.write", "medias.readonly",
             "medias.write", "membership.write", "native-integrations.readonly", "native-integrations.write",
             "opportunities.write", "opportunities/bulkActions.write", "opportunities/leadValue.readonly",
-            "payments.write", "payments/exports.write", "payments/records.write", "payments/refunds.write",
-            "payments/subscriptionsCancel.write", "prospecting.readonly", "prospecting.write",
+            "payments.write", "payments/records.write", "payments/transactions.refund",
+            "payments/subscriptions.pauseResumeCancel", "prospecting.readonly", "prospecting.write",
             "prospecting/auditReport.write", "prospecting/reports.readonly", "qrcodes.write",
             "quizzes.write", "reporting/adwords.readonly", "reporting/agent.readonly",
             "reporting/attributions.readonly", "reporting/facebookAds.readonly", "reporting/phone.readonly",
@@ -3729,7 +3728,7 @@ async def run_ghl_creation_background(
             "socialplanner/tag.write", "socialplanner/twitter.readonly", "socialplanner/watermarks.readonly",
             "socialplanner/watermarks.write", "surveys.write", "triggers.write", "voice-ai-agent-goals.readonly",
             "voice-ai-agent-goals.write", "voice-ai-agents.write", "voice-ai-dashboard.readonly",
-            "websites.write", "wordpress.read", "wordpress.write", "workflows.readonly"
+            "websites.write", "wordpress.read", "wordpress.write", "workflows.write"
         ]
         
         # Add delay for location propagation
