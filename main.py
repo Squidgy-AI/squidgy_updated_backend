@@ -3988,12 +3988,17 @@ async def run_facebook_automation_registration(
 async def create_subaccount_and_user_registration(request: GHLRegistrationRequest):
     """Create GHL sub-account and user during user registration - runs as async job"""
     try:
-        print(f"[GHL REGISTRATION] 🚀 Starting GHL account creation for registration")
-        print(f"[GHL REGISTRATION] Full Name: {request.full_name}")
-        print(f"[GHL REGISTRATION] Email: {request.email}")
+        print(f"🚀 BACKEND_GHL: ===== GHL REGISTRATION ENDPOINT CALLED =====")
+        print(f"📥 BACKEND_GHL: Request received at {datetime.now().isoformat()}")
+        print(f"👤 BACKEND_GHL: Full Name: {request.full_name}")
+        print(f"📧 BACKEND_GHL: Email: {request.email}")
+        print(f"📱 BACKEND_GHL: Phone: {getattr(request, 'phone', 'Not provided')}")
+        print(f"🌍 BACKEND_GHL: Address: {getattr(request, 'address', 'Not provided')}")
+        print(f"🌐 BACKEND_GHL: Website: {getattr(request, 'website', 'Not provided')}")
         
         # Step 1: Lookup user_id and company_id from profiles table
-        print(f"[GHL REGISTRATION] 🔍 Looking up user profile by email: {request.email}")
+        print(f"🔍 BACKEND_GHL: Step 1 - Looking up user profile by email: {request.email}")
+        start_profile_lookup = time.time()
         
         user_profile = supabase.table('profiles')\
             .select('user_id, company_id')\
@@ -4001,36 +4006,47 @@ async def create_subaccount_and_user_registration(request: GHLRegistrationReques
             .single()\
             .execute()
         
+        end_profile_lookup = time.time()
+        print(f"⏱️ BACKEND_GHL: Profile lookup completed in {(end_profile_lookup - start_profile_lookup) * 1000:.0f}ms")
+        
         if not user_profile.data:
+            print(f"❌ BACKEND_GHL: User profile not found for email: {request.email}")
             raise HTTPException(status_code=404, detail=f"User profile not found for email: {request.email}")
         
         user_id = user_profile.data['user_id']
         company_id = user_profile.data['company_id']
         
-        print(f"[GHL REGISTRATION] ✅ Found user profile:")
-        print(f"[GHL REGISTRATION]   user_id (firm_user_id): {user_id}")
-        print(f"[GHL REGISTRATION]   company_id (firm_id): {company_id}")
+        print(f"✅ BACKEND_GHL: Found user profile successfully:")
+        print(f"🆔 BACKEND_GHL:   user_id (firm_user_id): {user_id}")
+        print(f"🏢 BACKEND_GHL:   company_id (firm_id): {company_id}")
+        print(f"📊 BACKEND_GHL:   profile_data: {user_profile.data}")
         
         # Step 2: Parse full name into first and last name
+        print(f"📝 BACKEND_GHL: Step 2 - Parsing full name...")
         name_parts = request.full_name.strip().split(' ', 1)
         first_name = name_parts[0]
         last_name = name_parts[1] if len(name_parts) > 1 else "Client"
+        print(f"👤 BACKEND_GHL: Parsed name - First: '{first_name}', Last: '{last_name}'")
         
         # Step 3: Generate subaccount name and website
+        print(f"🏗️ BACKEND_GHL: Step 3 - Generating subaccount details...")
         timestamp = datetime.now().strftime("%H%M%S")
         subaccount_name = f"{request.full_name} @Client_{request.email}"
         website = request.website or f"https://client-{timestamp}.com"
         
-        print(f"[GHL REGISTRATION] 📝 Generated values:")
-        print(f"[GHL REGISTRATION]   subaccount_name: {subaccount_name}")
-        print(f"[GHL REGISTRATION]   prospect_first_name: {first_name}")
-        print(f"[GHL REGISTRATION]   prospect_last_name: {last_name}")
-        print(f"[GHL REGISTRATION]   website: {website}")
+        print(f"📝 BACKEND_GHL: Generated values:")
+        print(f"🏢 BACKEND_GHL:   subaccount_name: {subaccount_name}")
+        print(f"👤 BACKEND_GHL:   prospect_first_name: {first_name}")
+        print(f"👤 BACKEND_GHL:   prospect_last_name: {last_name}")
+        print(f"🌐 BACKEND_GHL:   website: {website}")
+        print(f"⏰ BACKEND_GHL:   timestamp: {timestamp}")
         
         # Step 4: Create entry in ghl_subaccounts table (pending status)
+        print(f"💾 BACKEND_GHL: Step 4 - Creating database record...")
         ghl_record_id = str(uuid.uuid4())
+        print(f"🆔 BACKEND_GHL: Generated GHL record ID: {ghl_record_id}")
         
-        print(f"[GHL REGISTRATION] 💾 Creating database record...")
+        start_db_insert = time.time()
         supabase.table('ghl_subaccounts').insert({
             'id': ghl_record_id,
             'firm_user_id': user_id,
@@ -4052,11 +4068,19 @@ async def create_subaccount_and_user_registration(request: GHLRegistrationReques
             'automation_status': 'not_started'
         }).execute()
         
-        print(f"[GHL REGISTRATION] ✅ Database record created: {ghl_record_id}")
+        end_db_insert = time.time()
+        print(f"⏱️ BACKEND_GHL: Database insert completed in {(end_db_insert - start_db_insert) * 1000:.0f}ms")
+        print(f"✅ BACKEND_GHL: Database record created successfully: {ghl_record_id}")
         
         # Step 5: Run GHL creation as async background task
-        print(f"[GHL REGISTRATION] 🚀 Starting background GHL creation task...")
+        print(f"🚀 BACKEND_GHL: Step 5 - Starting background GHL creation task...")
+        print(f"🔧 BACKEND_GHL: Background task parameters:")
+        print(f"🆔 BACKEND_GHL:   ghl_record_id: {ghl_record_id}")
+        print(f"👤 BACKEND_GHL:   user_id: {user_id}")
+        print(f"🏢 BACKEND_GHL:   company_id: {company_id}")
+        print(f"📧 BACKEND_GHL:   prospect_email: {request.email}")
         
+        background_task_start = time.time()
         asyncio.create_task(run_ghl_creation_background(
             ghl_record_id=ghl_record_id,
             user_id=user_id,
@@ -4075,8 +4099,14 @@ async def create_subaccount_and_user_registration(request: GHLRegistrationReques
             prospect_email=request.email
         ))
         
+        background_task_end = time.time()
+        print(f"⏱️ BACKEND_GHL: Background task creation completed in {(background_task_end - background_task_start) * 1000:.0f}ms")
+        print(f"✅ BACKEND_GHL: Background task started successfully")
+        
         # Step 6: Return immediate response while background task runs
-        return {
+        print(f"📤 BACKEND_GHL: Step 6 - Preparing response...")
+        
+        response_data = {
             "status": "accepted",
             "message": "GHL account creation started successfully",
             "ghl_record_id": ghl_record_id,
@@ -4088,7 +4118,20 @@ async def create_subaccount_and_user_registration(request: GHLRegistrationReques
             "created_at": datetime.now().isoformat()
         }
         
+        print(f"📋 BACKEND_GHL: Response prepared:")
+        print(f"✅ BACKEND_GHL:   status: {response_data['status']}")
+        print(f"🆔 BACKEND_GHL:   ghl_record_id: {response_data['ghl_record_id']}")
+        print(f"👤 BACKEND_GHL:   user_id: {response_data['user_id']}")
+        print(f"🕒 BACKEND_GHL:   created_at: {response_data['created_at']}")
+        print(f"🎯 BACKEND_GHL: ===== GHL REGISTRATION ENDPOINT COMPLETED =====")
+        
+        return response_data
+        
     except Exception as e:
+        print(f"❌ BACKEND_GHL: CRITICAL ERROR in registration GHL creation:")
+        print(f"❌ BACKEND_GHL: Error type: {type(e).__name__}")
+        print(f"❌ BACKEND_GHL: Error message: {str(e)}")
+        print(f"❌ BACKEND_GHL: Error occurred at: {datetime.now().isoformat()}")
         logger.error(f"Error in registration GHL creation: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
