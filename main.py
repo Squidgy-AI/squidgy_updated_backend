@@ -3822,7 +3822,7 @@ async def run_ghl_creation_background(
             phone="+17166044029",
             role="admin",
             permissions=full_permissions,
-            scopes=location_scopes
+            scopes=None  # TEST: Remove all scopes to see if user creation works
         )
         
         if soma_user_response.get("status") != "success":
