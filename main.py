@@ -2872,9 +2872,10 @@ async def create_agency_user(
     # Only add permissions and scopes if provided
     if permissions:
         payload["permissions"] = permissions
-    if scopes:
-        payload["scopes"] = scopes
-        payload["scopesAssignedToOnly"] = []
+    # TEMPORARILY DISABLE SCOPES to avoid 422 validation errors
+    # if scopes:
+    #     payload["scopes"] = scopes
+    #     payload["scopesAssignedToOnly"] = []
     
     headers = {
         "Authorization": f"Bearer {agency_token}",
