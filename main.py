@@ -20,7 +20,7 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Back
 from starlette.websockets import WebSocketState
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, HTMLResponse
-from openai import OpenAI
+# from openai import OpenAI
 from pydantic import BaseModel
 from supabase import create_client, Client
 from PIL import Image
@@ -524,7 +524,7 @@ _requests_lock = threading.Lock()
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 PERPLEXITY_API_KEY = os.getenv("PERPLEXITY_API_KEY")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+# OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 N8N_MAIN = os.getenv("N8N_MAIN", "https://n8n.theaiteam.uk/webhook/c2fcbad6-abc0-43af-8aa8-d1661ff4461d")
 N8N_MAIN_TEST = os.getenv("N8N_MAIN_TEST")
 
@@ -557,7 +557,7 @@ print("Application initialized")
 background_results = {}
 running_tasks: Dict[str, Dict[str, Any]] = {}
 
-openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 AGENT_DESCRIPTIONS = {
     "PersonalAssistant": "Personal Assistant Agent"
@@ -2975,28 +2975,28 @@ class WebsiteExtractionResponse(BaseModel):
     extracted_data: dict = None
     ghl_response: dict = None
 
-@app.post("/api/ghl/extract-and-create-account", response_model=WebsiteExtractionResponse)
-async def extract_website_info_and_create_account(request: WebsiteExtractionRequest, background_tasks: BackgroundTasks):
-    """Extract business info from website using LLM and create GHL account in background"""
-    try:
-        # Add to background tasks for processing
-        background_tasks.add_task(process_website_extraction, request.website_url, request.user_id)
+# @app.post("/api/ghl/extract-and-create-account", response_model=WebsiteExtractionResponse)
+# async def extract_website_info_and_create_account(request: WebsiteExtractionRequest, background_tasks: BackgroundTasks):
+#     """Extract business info from website using LLM and create GHL account in background"""
+#     try:
+#         # Add to background tasks for processing
+#         background_tasks.add_task(process_website_extraction, request.website_url, request.user_id)
         
-        return WebsiteExtractionResponse(
-            success=True,
-            message="Website extraction started in background. GHL account will be created automatically.",
-            extracted_data=None,
-            ghl_response=None
-        )
+#         return WebsiteExtractionResponse(
+#             success=True,
+#             message="Website extraction started in background. GHL account will be created automatically.",
+#             extracted_data=None,
+#             ghl_response=None
+#         )
         
-    except Exception as e:
-        logger.error(f"Error starting website extraction: {e}")
-        return WebsiteExtractionResponse(
-            success=False,
-            message=f"Failed to start website extraction: {str(e)}",
-            extracted_data=None,
-            ghl_response=None
-        )
+#     except Exception as e:
+#         logger.error(f"Error starting website extraction: {e}")
+#         return WebsiteExtractionResponse(
+#             success=False,
+#             message=f"Failed to start website extraction: {str(e)}",
+#             extracted_data=None,
+#             ghl_response=None
+#         )
 
 async def process_website_extraction(website_url: str, user_id: str):
     """Background task to extract website info and create GHL account"""
@@ -3060,7 +3060,7 @@ async def extract_business_info_from_website(website_url: str) -> dict:
         Return only the JSON object, no other text.
         """
         
-        # Call Perplexity API (or OpenAI as fallback)
+        # Call Perplexity API (OpenAI fallback disabled)
         llm_response = await call_llm_api(prompt)
         
         # Parse JSON response
@@ -3083,7 +3083,7 @@ async def extract_business_info_from_website(website_url: str) -> dict:
         return None
 
 async def call_llm_api(prompt: str) -> str:
-    """Call LLM API (Perplexity preferred, OpenAI fallback)"""
+    """Call LLM API (Perplexity only, OpenAI fallback disabled)"""
     try:
         import httpx
         import os
@@ -3116,33 +3116,33 @@ async def call_llm_api(prompt: str) -> str:
                     result = response.json()
                     return result['choices'][0]['message']['content']
         
-        # Fallback to OpenAI
-        openai_key = os.getenv('OPENAI_API_KEY')
-        if openai_key:
-            headers = {
-                'Authorization': f'Bearer {openai_key}',
-                'Content-Type': 'application/json'
-            }
-            
-            payload = {
-                'model': 'gpt-3.5-turbo',
-                'messages': [
-                    {'role': 'user', 'content': prompt}
-                ],
-                'max_tokens': 1000,
-                'temperature': 0.1
-            }
-            
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                response = await client.post(
-                    'https://api.openai.com/v1/chat/completions',
-                    headers=headers,
-                    json=payload
-                )
-                
-                if response.status_code == 200:
-                    result = response.json()
-                    return result['choices'][0]['message']['content']
+        # Fallback to OpenAI - COMMENTED OUT TO REDUCE DEPENDENCIES
+        # openai_key = os.getenv('OPENAI_API_KEY')
+        # if openai_key:
+        #     headers = {
+        #         'Authorization': f'Bearer {openai_key}',
+        #         'Content-Type': 'application/json'
+        #     }
+        #     
+        #     payload = {
+        #         'model': 'gpt-3.5-turbo',
+        #         'messages': [
+        #             {'role': 'user', 'content': prompt}
+        #         ],
+        #         'max_tokens': 1000,
+        #         'temperature': 0.1
+        #     }
+        #     
+        #     async with httpx.AsyncClient(timeout=60.0) as client:
+        #         response = await client.post(
+        #             'https://api.openai.com/v1/chat/completions',
+        #             headers=headers,
+        #             json=payload
+        #         )
+        #         
+        #         if response.status_code == 200:
+        #             result = response.json()
+        #             return result['choices'][0]['message']['content']
         
         # If no API keys available, return default
         logger.warning("No LLM API keys available, using default extraction")
