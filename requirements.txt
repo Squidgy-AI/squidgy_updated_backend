@@ -22,3 +22,6 @@ pillow==11.1.0
 
 # Web scraping
 beautifulsoup4==4.12.3
+
+# Form data handling
+python-multipart==0.0.9
