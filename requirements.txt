@@ -19,3 +19,6 @@ cryptography==45.0.5
 
 # Image processing (lightweight)
 pillow==11.1.0
+
+# Web scraping
+beautifulsoup4==4.12.3
