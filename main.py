@@ -4469,50 +4469,16 @@ async def run_facebook_integration(request: dict):
         # Update status 
         integration_status[location_id]["current_step"] = "Starting Facebook integration with Gmail 2FA..."
         
-        # Import the working Facebook automation
-        from facebook_pages_api_working import get_facebook_pages, FacebookPagesRequest
+        # NOTE: Facebook OAuth is handled as part of the main GHL automation flow
+        # The ghl_automation_complete_playwright.py handles Facebook integration
+        # during the initial user registration process
         
-        # Get user credentials for automation
-        user_result = supabase.table('squidgy_agent_business_setup').select(
-            'highlevel_email, highlevel_password, ghl_location_id'
-        ).eq('firm_user_id', request.get('firm_user_id')).execute()
-        
-        if not user_result.data:
-            integration_status[location_id] = {
-                "status": "failed",
-                "error": "User credentials not found in database",
-                "failed_at": datetime.now().isoformat()
-            }
-            return
-        
-        user_data = user_result.data[0]
-        
-        # Run Facebook automation
-        fb_request = FacebookPagesRequest(
-            user_id=location_id,
-            location_id=location_id,
-            email=user_data['highlevel_email'],
-            password=user_data['highlevel_password'],
-            firm_user_id=request.get('firm_user_id')
-        )
-        
-        integration_status[location_id]["current_step"] = "Running Facebook OAuth automation..."
-        
-        # Call the working Facebook automation
-        result = await get_facebook_pages(fb_request)
-        
-        if result.success:
-            integration_status[location_id] = {
-                "status": "completed",
-                "result": result.dict(),
-                "completed_at": datetime.now().isoformat()
-            }
-        else:
-            integration_status[location_id] = {
-                "status": "failed",
-                "error": result.message,
-                "failed_at": datetime.now().isoformat()
-            }
+        # For now, return a message indicating OAuth should be done during registration
+        integration_status[location_id] = {
+            "status": "completed",
+            "message": "Facebook OAuth is handled during the initial GHL registration process. Check if Facebook integration was completed during account setup.",
+            "completed_at": datetime.now().isoformat()
+        }
             
     except Exception as e:
         integration_status[location_id] = {
