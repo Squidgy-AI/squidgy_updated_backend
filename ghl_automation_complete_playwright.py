@@ -989,19 +989,37 @@ class HighLevelCompleteAutomationPlaywright:
                 
                 # Fill email field
                 try:
-                    print("[LOGIN] Looking for email field using exact XPath...")
-                    email_xpath = "/html/body/div[1]/div[1]/div[4]/section/div[2]/div/div/div/div[2]/div/div[2]/input"
-                    xpath_selector = f"xpath={email_xpath}"
+                    print("[LOGIN] Looking for email field...")
                     
-                    await self.page.wait_for_selector(xpath_selector, timeout=10000)
-                    print("[LOGIN] Found email field with exact XPath")
+                    # Try multiple selectors based on the actual page structure
+                    email_selectors = [
+                        'input[placeholder="Your email address"]',  # Most specific - from screenshot
+                        'input[type="email"]',  # Generic email input
+                        '//input[@placeholder="Your email address"]',  # XPath version
+                        'input[name="email"]',  # Name attribute fallback
+                    ]
                     
-                    await self.page.click(xpath_selector)
-                    await self.page.fill(xpath_selector, "")  # Clear by filling with empty string
-                    await asyncio.sleep(0.5)
-                    await self.page.fill(xpath_selector, email)
-                    print(f"[LOGIN] Email filled: {email}")
-                    await asyncio.sleep(1)
+                    email_filled = False
+                    for selector in email_selectors:
+                        try:
+                            # Add xpath prefix if it's an xpath selector
+                            if selector.startswith('//'):
+                                selector = f"xpath={selector}"
+                            
+                            print(f"[LOGIN] Trying selector: {selector}")
+                            await self.page.wait_for_selector(selector, timeout=3000)
+                            await self.page.click(selector)
+                            await self.page.fill(selector, email)
+                            print(f"[LOGIN] ✅ Email filled successfully with: {email}")
+                            email_filled = True
+                            await asyncio.sleep(1)
+                            break
+                        except Exception as selector_error:
+                            print(f"[LOGIN] Selector {selector} didn't work, trying next...")
+                            continue
+                    
+                    if not email_filled:
+                        raise Exception("Could not find email field with any selector")
                         
                 except Exception as e:
                     print(f"[ERROR] Email field error: {e}")
@@ -1009,19 +1027,38 @@ class HighLevelCompleteAutomationPlaywright:
                 
                 # Fill password field
                 try:
-                    print("[LOGIN] Looking for password field using exact XPath...")
-                    password_xpath = "/html/body/div[1]/div[1]/div[4]/section/div[2]/div/div/div/div[3]/div/div[2]/input"
-                    xpath_selector = f"xpath={password_xpath}"
+                    print("[LOGIN] Looking for password field...")
                     
-                    await self.page.wait_for_selector(xpath_selector, timeout=10000)
-                    print("[LOGIN] Found password field with exact XPath")
+                    # Try multiple selectors based on the actual page structure
+                    password_selectors = [
+                        'input[placeholder="The password you picked"]',  # Most specific - from screenshot
+                        'input[type="password"]',  # Generic password input
+                        '//input[@placeholder="The password you picked"]',  # XPath version
+                        'input[name="password"]',  # Name attribute fallback
+                    ]
                     
-                    await self.page.click(xpath_selector)
-                    await self.page.fill(xpath_selector, "")  # Clear by filling with empty string
-                    await asyncio.sleep(0.5)
-                    await self.page.fill(xpath_selector, password)
-                    print("[LOGIN] Password filled")
-                    await asyncio.sleep(1)
+                    password_filled = False
+                    for selector in password_selectors:
+                        try:
+                            # Add xpath prefix if it's an xpath selector
+                            if selector.startswith('//'):
+                                selector = f"xpath={selector}"
+                            
+                            print(f"[LOGIN] Trying selector: {selector}")
+                            await self.page.wait_for_selector(selector, timeout=3000)
+                            await self.page.click(selector)
+                            await self.page.fill(selector, password)
+                            print("[LOGIN] ✅ Password filled successfully")
+                            password_filled = True
+                            await asyncio.sleep(1)
+                            break
+                        except Exception as selector_error:
+                            print(f"[LOGIN] Selector {selector} didn't work, trying next...")
+                            continue
+                    
+                    if not password_filled:
+                        raise Exception("Could not find password field with any selector")
+                        
                 except Exception as e:
                     print(f"[ERROR] Password field error: {e}")
                     return False
