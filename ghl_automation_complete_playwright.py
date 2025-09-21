@@ -363,17 +363,42 @@ class HighLevelCompleteAutomationPlaywright:
                 
                 # First, click the "Send Code" button
                 try:
-                    print("[VERIFICATION] Looking for 'Send Code' button...")
-                    send_code_xpath = "/html/body/div[1]/div[1]/div[4]/section/div[2]/div/div/div/div[3]/div/button"
+                    print("[VERIFICATION] Looking for 'Send Security Code' button...")
                     
-                    await self.page.wait_for_selector(f"xpath={send_code_xpath}", timeout=10000)
-                    await self.page.click(f"xpath={send_code_xpath}")
-                    print("[VERIFICATION] 'Send Code' button clicked - email being sent...")
-                    print("[⏳ WAITING] Waiting 5 seconds for email to be sent...")
-                    await asyncio.sleep(5)  # Give more time for email to arrive
+                    # Try multiple selectors for the button
+                    button_selectors = [
+                        'button:has-text("Send Security Code")',  # Most specific - exact text
+                        'button.bg-curious-blue-500',  # Class-based selector from HTML
+                        '//button[contains(text(), "Send Security Code")]',  # XPath with text
+                        'button.hl-btn',  # Generic button class
+                        f"xpath={'/html/body/div[1]/div[1]/div[4]/section/div[2]/div/div/div/div[3]/div/button'}"  # Fallback
+                    ]
+                    
+                    button_clicked = False
+                    for selector in button_selectors:
+                        try:
+                            # Add xpath prefix if it's an xpath selector
+                            if selector.startswith('//'):
+                                selector = f"xpath={selector}"
+                            
+                            print(f"[VERIFICATION] Trying selector: {selector[:50]}...")
+                            await self.page.wait_for_selector(selector, timeout=3000)
+                            await self.page.click(selector)
+                            print("[VERIFICATION] ✅ 'Send Security Code' button clicked successfully!")
+                            button_clicked = True
+                            break
+                        except:
+                            continue
+                    
+                    if button_clicked:
+                        print("[⏳ WAITING] Waiting 5 seconds for email to be sent...")
+                        await asyncio.sleep(5)  # Give more time for email to arrive
+                    else:
+                        print("[WARNING] Could not click 'Send Security Code' button with any selector")
+                        print("[INFO] Continuing anyway - code may already be sent")
                     
                 except Exception as e:
-                    print(f"[WARNING] Could not find/click 'Send Code' button: {e}")
+                    print(f"[WARNING] Button clicking error: {e}")
                     print("[INFO] Continuing anyway - code may already be sent")
                 
                 print("[📧 AUTO] Starting automatic OTP retrieval...")
