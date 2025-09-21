@@ -361,6 +361,22 @@ class HighLevelCompleteAutomationPlaywright:
                 print("[VERIFICATION] Email verification required!")
                 print("="*60)
                 
+                # Check what email address is displayed for verification
+                try:
+                    # Look for the email text on the page
+                    email_element = await self.page.query_selector('text=/Send code to email/')
+                    if email_element:
+                        email_text = await email_element.text_content()
+                        print(f"[VERIFICATION] Email displayed on page: {email_text}")
+                    
+                    # Also try to get the full text near the radio button
+                    radio_text_element = await self.page.query_selector('.flex.items-center')
+                    if radio_text_element:
+                        radio_text = await radio_text_element.text_content()
+                        print(f"[VERIFICATION] Full verification text: {radio_text}")
+                except Exception as e:
+                    print(f"[VERIFICATION] Could not extract email display: {e}")
+                
                 # First, click the "Send Code" button
                 try:
                     print("[VERIFICATION] Looking for 'Send Security Code' button...")
@@ -383,7 +399,17 @@ class HighLevelCompleteAutomationPlaywright:
                             
                             print(f"[VERIFICATION] Trying selector: {selector[:50]}...")
                             await self.page.wait_for_selector(selector, timeout=3000)
+                            
+                            # Click the button and wait for network activity
+                            print("[VERIFICATION] Clicking button and waiting for network response...")
                             await self.page.click(selector)
+                            
+                            # Wait for any loading indicators to appear and disappear
+                            try:
+                                await self.page.wait_for_load_state('networkidle', timeout=5000)
+                            except:
+                                pass  # Continue even if network doesn't settle
+                            
                             print("[VERIFICATION] ✅ 'Send Security Code' button clicked successfully!")
                             button_clicked = True
                             break
@@ -391,8 +417,17 @@ class HighLevelCompleteAutomationPlaywright:
                             continue
                     
                     if button_clicked:
-                        print("[⏳ WAITING] Waiting 5 seconds for email to be sent...")
-                        await asyncio.sleep(5)  # Give more time for email to arrive
+                        print("[⏳ WAITING] Waiting 8 seconds for email to be sent...")
+                        await asyncio.sleep(8)  # Give more time for email to arrive and process
+                        
+                        # Check if there's any error message on the page
+                        try:
+                            error_element = await self.page.query_selector('.text-red-500, .error-message, .alert-danger')
+                            if error_element:
+                                error_text = await error_element.text_content()
+                                print(f"[WARNING] Error message found: {error_text}")
+                        except:
+                            pass
                     else:
                         print("[WARNING] Could not click 'Send Security Code' button with any selector")
                         print("[INFO] Continuing anyway - code may already be sent")
