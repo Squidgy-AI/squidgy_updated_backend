@@ -361,26 +361,10 @@ class HighLevelCompleteAutomationPlaywright:
                 print("[VERIFICATION] Email verification required!")
                 print("="*60)
                 
-                # Check what email address is displayed for verification
-                try:
-                    # Look for the email text on the page
-                    email_element = await self.page.query_selector('text=/Send code to email/')
-                    if email_element:
-                        email_text = await email_element.text_content()
-                        print(f"[VERIFICATION] Email displayed on page: {email_text}")
-                    
-                    # Also try to get the full text near the radio button
-                    radio_text_element = await self.page.query_selector('.flex.items-center')
-                    if radio_text_element:
-                        radio_text = await radio_text_element.text_content()
-                        print(f"[VERIFICATION] Full verification text: {radio_text}")
-                except Exception as e:
-                    print(f"[VERIFICATION] Could not extract email display: {e}")
-                
                 # First, click the "Send Code" button
                 try:
                     print("[VERIFICATION] Looking for 'Send Security Code' button...")
-                    
+
                     # Try multiple selectors for the button
                     button_selectors = [
                         'button:has-text("Send Security Code")',  # Most specific - exact text
@@ -399,17 +383,7 @@ class HighLevelCompleteAutomationPlaywright:
                             
                             print(f"[VERIFICATION] Trying selector: {selector[:50]}...")
                             await self.page.wait_for_selector(selector, timeout=3000)
-                            
-                            # Click the button and wait for network activity
-                            print("[VERIFICATION] Clicking button and waiting for network response...")
                             await self.page.click(selector)
-                            
-                            # Wait for any loading indicators to appear and disappear
-                            try:
-                                await self.page.wait_for_load_state('networkidle', timeout=5000)
-                            except:
-                                pass  # Continue even if network doesn't settle
-                            
                             print("[VERIFICATION] ✅ 'Send Security Code' button clicked successfully!")
                             button_clicked = True
                             break
@@ -417,21 +391,12 @@ class HighLevelCompleteAutomationPlaywright:
                             continue
                     
                     if button_clicked:
-                        print("[⏳ WAITING] Waiting 8 seconds for email to be sent...")
-                        await asyncio.sleep(8)  # Give more time for email to arrive and process
-                        
-                        # Check if there's any error message on the page
-                        try:
-                            error_element = await self.page.query_selector('.text-red-500, .error-message, .alert-danger')
-                            if error_element:
-                                error_text = await error_element.text_content()
-                                print(f"[WARNING] Error message found: {error_text}")
-                        except:
-                            pass
+                        print("[⏳ WAITING] Waiting 5 seconds for email to be sent...")
+                        await asyncio.sleep(5)  # Give more time for email to arrive
                     else:
                         print("[WARNING] Could not click 'Send Security Code' button with any selector")
                         print("[INFO] Continuing anyway - code may already be sent")
-                    
+
                 except Exception as e:
                     print(f"[WARNING] Button clicking error: {e}")
                     print("[INFO] Continuing anyway - code may already be sent")
@@ -754,15 +719,46 @@ class HighLevelCompleteAutomationPlaywright:
         try:
             print("[INTEGRATION] Filling integration name...")
             print("[PIT CREATION] 📝 Step 3.A: Filling integration form with name 'location key'")
-            name_xpath = "/html/body/div[1]/div[1]/div[4]/section/div/section/div/div/div/div[2]/div/div[2]/div/div/div[1]/div/form/div[1]/div[1]/div/div[1]/div[1]/input"
-            xpath_selector = f"xpath={name_xpath}"
             
-            print(f"[PIT CREATION] 🔍 Looking for name input field: {name_xpath}")
-            await self.page.wait_for_selector(xpath_selector, timeout=10000)
-            print("[PIT CREATION] ✅ Found name input field")
+            # Multiple selectors for integration name input field
+            name_selectors = [
+                'input[placeholder*="integration name" i]',  # Placeholder containing "integration name" (case insensitive)
+                'input[placeholder*="name" i]',  # Placeholder containing "name" (case insensitive)
+                'input[name="name"]',  # Name attribute
+                'form input[type="text"]:first-of-type',  # First text input in form
+                'form div input',  # Generic form input
+                "/html/body/div[1]/div[1]/div[4]/section/div/section/div/div/div/div[2]/div/div[2]/div/div/div[1]/div/form/div[1]/div[1]/div/div[1]/div[1]/input"  # Original XPath as fallback
+            ]
             
-            await self.page.fill(xpath_selector, "")  # Clear by filling with empty string
-            await self.page.fill(xpath_selector, "location key")
+            name_field_found = False
+            for selector in name_selectors:
+                try:
+                    if selector.startswith('/'):
+                        # XPath selector
+                        xpath_selector = f"xpath={selector}"
+                        print(f"[PIT CREATION] 🔍 Trying XPath selector: {selector}")
+                        await self.page.wait_for_selector(xpath_selector, timeout=3000)
+                        await self.page.fill(xpath_selector, "")  # Clear by filling with empty string
+                        await self.page.fill(xpath_selector, "location key")
+                        print(f"[PIT CREATION] ✅ Successfully filled integration name using XPath: {selector}")
+                        name_field_found = True
+                        break
+                    else:
+                        # CSS selector
+                        print(f"[PIT CREATION] 🔍 Trying CSS selector: {selector}")
+                        await self.page.wait_for_selector(selector, timeout=3000)
+                        await self.page.fill(selector, "")  # Clear by filling with empty string
+                        await self.page.fill(selector, "location key")
+                        print(f"[PIT CREATION] ✅ Successfully filled integration name using CSS: {selector}")
+                        name_field_found = True
+                        break
+                except Exception as selector_error:
+                    print(f"[PIT CREATION] ❌ Selector failed: {selector} - {selector_error}")
+                    continue
+            
+            if not name_field_found:
+                raise Exception("Could not find integration name input field with any selector")
+                
             print("[INTEGRATION] Integration name set to: location key")
             print("[PIT CREATION] ✅ Successfully filled integration name")
             await asyncio.sleep(2)
@@ -776,14 +772,50 @@ class HighLevelCompleteAutomationPlaywright:
         try:
             print("[INTEGRATION] Submitting integration form...")
             print("[PIT CREATION] 📤 Step 3.B: Submitting the integration form")
-            submit_xpath = "/html/body/div[1]/div[1]/div[4]/section/div/section/div/div/div/div[2]/div/div[2]/div/div/div[2]/div/button[2]"
-            xpath_selector = f"xpath={submit_xpath}"
             
-            print(f"[PIT CREATION] 🔍 Looking for submit button: {submit_xpath}")
-            await self.page.wait_for_selector(xpath_selector, timeout=10000)
-            print("[PIT CREATION] ✅ Found submit button")
+            # Multiple selectors for submit button
+            submit_selectors = [
+                'button:has-text("Next")',  # Most likely submit text based on screenshot
+                'button:has-text("Continue")',  # Alternative submit text
+                'button:has-text("Submit")',  # Alternative submit text
+                'button:has-text("Create")',  # Create button text
+                '//button[contains(text(), "Next")]',  # XPath with Next text
+                '//button[contains(text(), "Continue")]',  # XPath with Continue text
+                '//button[contains(text(), "Submit")]',  # XPath with Submit text
+                '//button[contains(text(), "Create")]',  # XPath with Create text
+                'button[type="submit"]',  # Submit type button
+                'button.bg-curious-blue-500',  # Blue submit button class
+                'button.hl-btn.hl-btn--primary',  # Primary button class
+                "/html/body/div[1]/div[1]/div[4]/section/div/section/div/div/div/div[2]/div/div[2]/div/div/div[2]/div/button[2]"  # Original XPath as fallback
+            ]
             
-            await self.page.click(xpath_selector)
+            submit_button_found = False
+            for selector in submit_selectors:
+                try:
+                    if selector.startswith('/'):
+                        # XPath selector
+                        xpath_selector = f"xpath={selector}"
+                        print(f"[PIT CREATION] 🔍 Trying XPath selector: {selector}")
+                        await self.page.wait_for_selector(xpath_selector, timeout=3000)
+                        await self.page.click(xpath_selector)
+                        print(f"[PIT CREATION] ✅ Successfully clicked submit button using XPath: {selector}")
+                        submit_button_found = True
+                        break
+                    else:
+                        # CSS selector
+                        print(f"[PIT CREATION] 🔍 Trying CSS selector: {selector}")
+                        await self.page.wait_for_selector(selector, timeout=3000)
+                        await self.page.click(selector)
+                        print(f"[PIT CREATION] ✅ Successfully clicked submit button using CSS: {selector}")
+                        submit_button_found = True
+                        break
+                except Exception as selector_error:
+                    print(f"[PIT CREATION] ❌ Selector failed: {selector} - {selector_error}")
+                    continue
+            
+            if not submit_button_found:
+                raise Exception("Could not find submit button with any selector")
+                
             print("[INTEGRATION] Form submitted")
             print("[PIT CREATION] ✅ Successfully submitted integration form")
             print("[PIT CREATION] 🕐 Waiting 5 seconds for next step to load...")
@@ -798,18 +830,67 @@ class HighLevelCompleteAutomationPlaywright:
         try:
             print("[INTEGRATION] Opening scopes selection...")
             print("[PIT CREATION] 🎯 Step 3.C: Starting scope selection process")
-            print("[PIT CREATION] This is critical - we need to select 15 specific scopes")
+            print("[PIT CREATION] This is critical - we need to select specific scopes")
             
-            # Click the main scopes container to activate the input
-            print("[INTEGRATION] Clicking main scopes container...")
-            scopes_container_xpath = "/html/body/div[1]/div[1]/div[4]/section/div/section/div/div/div/div[2]/div/div[2]/div/div/div[1]/div/form/div/div/div[1]"
-            xpath_selector = f"xpath={scopes_container_xpath}"
+            # Wait for the scopes page to load
+            print("[INTEGRATION] Waiting for scopes page to load...")
+            await asyncio.sleep(3)
             
-            await self.page.wait_for_selector(xpath_selector, timeout=10000)
-            await self.page.click(xpath_selector)
+            # Check if we're on the scopes page by looking for "Scopes" tab
+            try:
+                await self.page.wait_for_selector('text=Scopes', timeout=5000)
+                print("[✅ SCOPES PAGE] Successfully on scopes selection page")
+            except:
+                print("[⚠️ WARNING] Could not confirm we're on scopes page, continuing anyway...")
+            
+            # Click the "Select scopes" dropdown to open it
+            print("[INTEGRATION] Looking for and clicking 'Select scopes' dropdown...")
+            
+            # Target the exact HTML structure from the provided code
+            dropdown_selectors = [
+                "#scopes-select",  # The exact ID from the HTML
+                ".hr-select#scopes-select",  # ID with class
+                ".hr-base-selection-tags",  # The clickable tags container
+                ".hr-base-selection",  # The base selection element
+                ".hr-base-selection-placeholder",  # The placeholder element
+                "div.hr-base-selection-placeholder__inner",  # The inner placeholder with "Select scopes" text
+                '[tabindex="0"].hr-base-selection-tags',  # Tabindex element
+                "//div[@class='hr-base-selection-tags']",  # XPath for tags container
+                "//div[@id='scopes-select']",  # XPath for ID
+                "//div[contains(@class, 'hr-base-selection') and contains(@class, 'hr-base-selection--multiple')]",  # XPath for selection container
+                "/html/body/div[1]/div[1]/div[4]/section/div/section/div/div/div/div[2]/div/div[2]/div/div/div[1]/div/form/div/div/div[1]"  # Original XPath as fallback
+            ]
+            
+            dropdown_found = False
+            for selector in dropdown_selectors:
+                try:
+                    if selector.startswith('/'):
+                        # XPath selector
+                        xpath_selector = f"xpath={selector}"
+                        print(f"[PIT CREATION] 🔍 Trying XPath selector: {selector}")
+                        await self.page.wait_for_selector(xpath_selector, timeout=3000)
+                        await self.page.click(xpath_selector)
+                        print(f"[PIT CREATION] ✅ Successfully clicked dropdown using XPath: {selector}")
+                        dropdown_found = True
+                        break
+                    else:
+                        # CSS selector
+                        print(f"[PIT CREATION] 🔍 Trying CSS selector: {selector}")
+                        await self.page.wait_for_selector(selector, timeout=3000)
+                        await self.page.click(selector)
+                        print(f"[PIT CREATION] ✅ Successfully clicked dropdown using CSS: {selector}")
+                        dropdown_found = True
+                        break
+                except Exception as selector_error:
+                    print(f"[PIT CREATION] ❌ Selector failed: {selector} - {selector_error}")
+                    continue
+            
+            if not dropdown_found:
+                raise Exception("Could not find Select scopes dropdown with any selector")
+                
             await asyncio.sleep(1)
             
-            # List of scopes to add - User specified scopes only (15)
+            # Select the specific 15 scopes needed
             scopes_to_add = [
                 # User-specified scopes (15)
                 "View Contacts", "Edit Contacts",
@@ -821,79 +902,115 @@ class HighLevelCompleteAutomationPlaywright:
                 "View Medias", "Edit Tags", "View Tags"
             ]
             
-            print(f"[PIT CREATION] 📋 Need to select {len(scopes_to_add)} scopes:")
+            print(f"[INTEGRATION] Will select {len(scopes_to_add)} specific scopes from the dropdown...")
             for i, scope in enumerate(scopes_to_add, 1):
                 print(f"[PIT CREATION]   {i:2d}. {scope}")
-            print("[PIT CREATION] All scopes must be selected for PIT to work properly")
+            
+            # Wait for dropdown options to be visible after clicking
+            await asyncio.sleep(2)
             
             try:
-                # Direct targeting approach
-                print("[INTEGRATION] Selecting scopes with direct targeting...")
+                # Type and select each specific scope from our list
+                print("[INTEGRATION] Using type-and-select approach for scopes...")
                 
-                # Try different possible selectors for the dropdown input
-                selectors = [
-                    "//input[@placeholder='Search scopes...']",
-                    "//div[contains(@class, 'n-base-selection-input-tag')]//input",
-                    "//div[contains(@class, 'vs__dropdown-toggle')]//input",
-                    "//*[contains(@placeholder, 'Search') or contains(@placeholder, 'search')]"
+                # Find the search input field in the dropdown
+                search_input_selectors = [
+                    ".hr-base-selection-input-tag__input",  # The input field from HTML
+                    "input[tabindex='-1']",  # Input with tabindex -1
+                    ".hr-base-selection-tags input",  # Input within tags container
+                    ".hr-base-selection input",  # Input within selection container
                 ]
                 
-                dropdown = None
-                for selector in selectors:
+                search_input = None
+                for selector in search_input_selectors:
                     try:
-                        print(f"Trying selector: {selector}")
-                        xpath_selector = f"xpath={selector}"
-                        await self.page.wait_for_selector(xpath_selector, timeout=3000)
-                        dropdown = self.page.locator(xpath_selector)
-                        print(f"Found dropdown with selector: {selector}")
+                        await self.page.wait_for_selector(selector, timeout=2000)
+                        search_input = self.page.locator(selector).first
+                        print(f"[SCOPES] 🔍 Found search input: {selector}")
                         break
-                    except Exception:
+                    except:
                         continue
                 
-                if not dropdown:
-                    # Last resort - try to find any input field
-                    print("Trying to find any input field")
-                    inputs = await self.page.locator("input").all()
-                    for inp in inputs:
-                        if await inp.is_visible() and await inp.is_enabled():
-                            dropdown = inp
-                            print("Found visible input element")
-                            break
+                if not search_input:
+                    print("[SCOPES] ⚠️ Could not find search input, falling back to clicking approach")
+                    raise Exception("No search input found")
                 
-                if not dropdown:
-                    raise Exception("Could not find any suitable input field for scopes")
+                scopes_found = 0
+                scopes_not_found = []
                 
-                # Make sure element is visible
-                await dropdown.scroll_into_view_if_needed()
-                await asyncio.sleep(0.05)
-                
-                # Click to ensure focus
-                await dropdown.click()
-                await asyncio.sleep(0.05)
-                
-                # For each scope, consistently type and press Enter
+                # For each specific scope we need
                 for i, scope in enumerate(scopes_to_add):
                     try:
-                        # Reset before each scope entry
-                        await dropdown.click()
-                        await asyncio.sleep(0.3)
+                        print(f"[SCOPES] [{i+1}/{len(scopes_to_add)}] Typing and selecting: {scope}")
                         
-                        # Log which scope we're processing
-                        print(f"[{i+1}/{len(scopes_to_add)}] Selecting: {scope}")
+                        # Clear any existing text and type the scope name
+                        await search_input.click()
+                        await asyncio.sleep(0.2)
+                        
+                        # Clear the input field
+                        await search_input.fill("")
+                        await asyncio.sleep(0.1)
                         
                         # Type the scope name
-                        await dropdown.fill(scope)
-                        await asyncio.sleep(0.05)
-                        await self.page.keyboard.press('Enter')
-                        await asyncio.sleep(0.05)
+                        await search_input.type(scope)
+                        await asyncio.sleep(0.5)  # Wait for filtering to happen
                         
-                        # Quick verification
-                        print(f"  ✓ Added scope: {scope}")
+                        # Now look for the filtered result and click it
+                        scope_selectors = [
+                            f'.hr-base-select-option:has-text("{scope}")',  # HR select option with exact text
+                            f'div[role="option"]:has-text("{scope}")',  # Option role with exact text
+                            f'//*[contains(@class, "hr-base-select-option") and contains(text(), "{scope}")]',  # XPath with class and text
+                            f'//p[normalize-space(text())="{scope}"]',  # XPath for p tag with exact text
+                        ]
+                        
+                        scope_found = False
+                        for selector in scope_selectors:
+                            try:
+                                if selector.startswith('/'):
+                                    # XPath selector
+                                    xpath_selector = f"xpath={selector}"
+                                    await self.page.wait_for_selector(xpath_selector, timeout=2000)
+                                    scope_element = self.page.locator(xpath_selector).first
+                                    await scope_element.click()
+                                    print(f"[SCOPES] ✅ Selected '{scope}' using XPath")
+                                    scope_found = True
+                                    scopes_found += 1
+                                    break
+                                else:
+                                    # CSS selector
+                                    await self.page.wait_for_selector(selector, timeout=2000)
+                                    scope_element = self.page.locator(selector).first
+                                    await scope_element.click()
+                                    print(f"[SCOPES] ✅ Selected '{scope}' using CSS")
+                                    scope_found = True
+                                    scopes_found += 1
+                                    break
+                            except Exception:
+                                continue
+                        
+                        if not scope_found:
+                            # Try pressing Enter as alternative
+                            try:
+                                await self.page.keyboard.press('Enter')
+                                print(f"[SCOPES] ✅ Selected '{scope}' using Enter key")
+                                scope_found = True
+                                scopes_found += 1
+                            except:
+                                print(f"[SCOPES] ⚠️ Could not select scope: {scope}")
+                                scopes_not_found.append(scope)
+                        
+                        await asyncio.sleep(0.3)  # Brief pause between selections
+                            
                     except Exception as e:
-                        print(f"Error selecting scope '{scope}': {e}")
+                        print(f"[SCOPES] ❌ Error selecting scope '{scope}': {e}")
+                        scopes_not_found.append(scope)
+                
+                print(f"[SCOPES] ✅ Successfully selected {scopes_found}/{len(scopes_to_add)} scopes")
+                if scopes_not_found:
+                    print(f"[SCOPES] ⚠️ Scopes not found: {scopes_not_found}")
                 
             except Exception as e:
-                print(f"[ERROR] Failed to select scope: {str(e)}")
+                print(f"[ERROR] Failed to select scopes: {str(e)}")
             
             # IMPORTANT: Click outside the dropdown to close it and finalize scope selection
             print("\n[INTEGRATION] Clicking outside dropdown to finalize scope selection...")
@@ -907,25 +1024,49 @@ class HighLevelCompleteAutomationPlaywright:
             
             # Continue with next steps - Click the Create button
             print("\n[INTEGRATION] Scope selection completed, clicking Create button...")
-            try:
-                # Use the exact XPath provided
-                create_button_xpath = "/html/body/div[1]/div[1]/div[4]/section/div/section/div/div/div/div[2]/div/div[2]/div/div/div[2]/div/button[2]/span"
-                xpath_selector = f"xpath={create_button_xpath}"
-                
-                await self.page.wait_for_selector(xpath_selector, timeout=10000)
-                await self.page.click(xpath_selector)
-                print("Clicked Create button using exact XPath")
-            except Exception as e:
-                print(f"Error clicking Create button: {str(e)}")
+            
+            # Multiple selectors for the final Create button
+            create_button_selectors = [
+                'button:has-text("Create")',  # Most likely text
+                'button:has-text("Save")',  # Alternative text
+                'button:has-text("Finish")',  # Alternative text
+                '//button[contains(text(), "Create")]',  # XPath with Create text
+                '//button[contains(text(), "Save")]',  # XPath with Save text
+                '//button[contains(text(), "Finish")]',  # XPath with Finish text
+                'button[type="submit"]',  # Submit type button
+                'button.bg-curious-blue-500',  # Blue button class
+                'button.hl-btn--primary',  # Primary button class
+                "/html/body/div[1]/div[1]/div[4]/section/div/section/div/div/div/div[2]/div/div[2]/div/div/div[2]/div/button[2]/span",  # Original XPath
+                "//*[@id='btn-next']/span"  # Alternative XPath
+            ]
+            
+            create_button_found = False
+            for selector in create_button_selectors:
                 try:
-                    # Try alternative selector as backup
-                    backup_xpath = f"xpath=//*[@id='btn-next']/span"
-                    await self.page.wait_for_selector(backup_xpath, timeout=10000)
-                    await self.page.click(backup_xpath)
-                    print("Clicked Create button using backup selector")
-                except Exception as e:
-                    print(f"Error clicking Create button with backup selector: {str(e)}")
-                    print("Please click the Create button manually")
+                    if selector.startswith('/'):
+                        # XPath selector
+                        xpath_selector = f"xpath={selector}"
+                        print(f"[PIT CREATION] 🔍 Trying XPath selector: {selector}")
+                        await self.page.wait_for_selector(xpath_selector, timeout=3000)
+                        await self.page.click(xpath_selector)
+                        print(f"[PIT CREATION] ✅ Successfully clicked Create button using XPath: {selector}")
+                        create_button_found = True
+                        break
+                    else:
+                        # CSS selector
+                        print(f"[PIT CREATION] 🔍 Trying CSS selector: {selector}")
+                        await self.page.wait_for_selector(selector, timeout=3000)
+                        await self.page.click(selector)
+                        print(f"[PIT CREATION] ✅ Successfully clicked Create button using CSS: {selector}")
+                        create_button_found = True
+                        break
+                except Exception as selector_error:
+                    print(f"[PIT CREATION] ❌ Selector failed: {selector} - {selector_error}")
+                    continue
+            
+            if not create_button_found:
+                print("[PIT CREATION] ⚠️ Could not find Create button with any selector")
+                print("[PIT CREATION] Please click the Create button manually")
             
             # Wait for token display and copy it
             print("[INTEGRATION] Waiting for token generation...")
@@ -1084,7 +1225,7 @@ class HighLevelCompleteAutomationPlaywright:
                 except Exception as e:
                     print(f"[ERROR] Email field error: {e}")
                     return False
-                
+
                 # Fill password field
                 try:
                     print("[LOGIN] Looking for password field...")

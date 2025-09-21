@@ -358,19 +358,44 @@ class HighLevelRetryAutomation:
                 print("[VERIFICATION] Email verification required!")
                 print("="*60)
                 
-                # Click the "Send Code" button
+                # Click the "Send Security Code" button
                 try:
-                    print("[VERIFICATION] Looking for 'Send Code' button...")
-                    send_code_xpath = "/html/body/div[1]/div[1]/div[4]/section/div[2]/div/div/div/div[3]/div/button"
+                    print("[VERIFICATION] Looking for 'Send Security Code' button...")
+
+                    # Try multiple selectors for the button
+                    button_selectors = [
+                        'button:has-text("Send Security Code")',  # Most specific - exact text
+                        'button.bg-curious-blue-500',  # Class-based selector from HTML
+                        '//button[contains(text(), "Send Security Code")]',  # XPath with text
+                        'button.hl-btn',  # Generic button class
+                        f"xpath={'/html/body/div[1]/div[1]/div[4]/section/div[2]/div/div/div/div[3]/div/button'}"  # Fallback
+                    ]
                     
-                    await self.page.wait_for_selector(f"xpath={send_code_xpath}", timeout=10000)
-                    await self.page.click(f"xpath={send_code_xpath}")
-                    print("[VERIFICATION] 'Send Code' button clicked - email being sent...")
-                    print("[⏳ WAITING] Waiting 5 seconds for email to be sent...")
-                    await asyncio.sleep(5)
+                    button_clicked = False
+                    for selector in button_selectors:
+                        try:
+                            # Add xpath prefix if it's an xpath selector
+                            if selector.startswith('//'):
+                                selector = f"xpath={selector}"
+                            
+                            print(f"[VERIFICATION] Trying selector: {selector[:50]}...")
+                            await self.page.wait_for_selector(selector, timeout=3000)
+                            await self.page.click(selector)
+                            print("[VERIFICATION] ✅ 'Send Security Code' button clicked successfully!")
+                            button_clicked = True
+                            break
+                        except:
+                            continue
                     
+                    if button_clicked:
+                        print("[⏳ WAITING] Waiting 5 seconds for email to be sent...")
+                        await asyncio.sleep(5)  # Give more time for email to arrive
+                    else:
+                        print("[WARNING] Could not click 'Send Security Code' button with any selector")
+                        print("[INFO] Continuing anyway - code may already be sent")
+
                 except Exception as e:
-                    print(f"[WARNING] Could not find/click 'Send Code' button: {e}")
+                    print(f"[WARNING] Button clicking error: {e}")
                     print("[INFO] Continuing anyway - code may already be sent")
                 
                 print("[📧 AUTO] Starting automatic OTP retrieval...")
@@ -492,18 +517,36 @@ class HighLevelRetryAutomation:
                 # Fill email field
                 try:
                     print("[LOGIN] Looking for email field...")
-                    email_xpath = "/html/body/div[1]/div[1]/div[4]/section/div[2]/div/div/div/div[2]/div/div[2]/input"
-                    xpath_selector = f"xpath={email_xpath}"
                     
-                    await self.page.wait_for_selector(xpath_selector, timeout=10000)
-                    print("[LOGIN] Found email field")
+                    # Try multiple selectors based on the actual page structure
+                    email_selectors = [
+                        'input[placeholder="Your email address"]',  # Most specific - from screenshot
+                        'input[type="email"]',  # Generic email input
+                        '//input[@placeholder="Your email address"]',  # XPath version
+                        'input[name="email"]',  # Name attribute fallback
+                    ]
                     
-                    await self.page.click(xpath_selector)
-                    await self.page.fill(xpath_selector, "")
-                    await asyncio.sleep(0.5)
-                    await self.page.fill(xpath_selector, email)
-                    print(f"[LOGIN] Email filled: {email}")
-                    await asyncio.sleep(1)
+                    email_filled = False
+                    for selector in email_selectors:
+                        try:
+                            # Add xpath prefix if it's an xpath selector
+                            if selector.startswith('//'):
+                                selector = f"xpath={selector}"
+                            
+                            print(f"[LOGIN] Trying selector: {selector}")
+                            await self.page.wait_for_selector(selector, timeout=3000)
+                            await self.page.click(selector)
+                            await self.page.fill(selector, email)
+                            print(f"[LOGIN] ✅ Email filled successfully with: {email}")
+                            email_filled = True
+                            await asyncio.sleep(1)
+                            break
+                        except Exception as selector_error:
+                            print(f"[LOGIN] Selector {selector} didn't work, trying next...")
+                            continue
+                    
+                    if not email_filled:
+                        raise Exception("Could not find email field with any selector")
                         
                 except Exception as e:
                     print(f"[ERROR] Email field error: {e}")
@@ -512,18 +555,37 @@ class HighLevelRetryAutomation:
                 # Fill password field
                 try:
                     print("[LOGIN] Looking for password field...")
-                    password_xpath = "/html/body/div[1]/div[1]/div[4]/section/div[2]/div/div/div/div[3]/div/div[2]/input"
-                    xpath_selector = f"xpath={password_xpath}"
                     
-                    await self.page.wait_for_selector(xpath_selector, timeout=10000)
-                    print("[LOGIN] Found password field")
+                    # Try multiple selectors based on the actual page structure
+                    password_selectors = [
+                        'input[placeholder="The password you picked"]',  # Most specific - from screenshot
+                        'input[type="password"]',  # Generic password input
+                        '//input[@placeholder="The password you picked"]',  # XPath version
+                        'input[name="password"]',  # Name attribute fallback
+                    ]
                     
-                    await self.page.click(xpath_selector)
-                    await self.page.fill(xpath_selector, "")
-                    await asyncio.sleep(0.5)
-                    await self.page.fill(xpath_selector, password)
-                    print("[LOGIN] Password filled")
-                    await asyncio.sleep(1)
+                    password_filled = False
+                    for selector in password_selectors:
+                        try:
+                            # Add xpath prefix if it's an xpath selector
+                            if selector.startswith('//'):
+                                selector = f"xpath={selector}"
+                            
+                            print(f"[LOGIN] Trying selector: {selector}")
+                            await self.page.wait_for_selector(selector, timeout=3000)
+                            await self.page.click(selector)
+                            await self.page.fill(selector, password)
+                            print("[LOGIN] ✅ Password filled successfully")
+                            password_filled = True
+                            await asyncio.sleep(1)
+                            break
+                        except Exception as selector_error:
+                            print(f"[LOGIN] Selector {selector} didn't work, trying next...")
+                            continue
+                    
+                    if not password_filled:
+                        raise Exception("Could not find password field with any selector")
+                        
                 except Exception as e:
                     print(f"[ERROR] Password field error: {e}")
                     return False
