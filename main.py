@@ -16,7 +16,7 @@ from typing import Dict, Any, Optional, List, Set
 # Third-party imports
 import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, BackgroundTasks, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, BackgroundTasks, UploadFile, File, Form, Request, Header
 from starlette.websockets import WebSocketState
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, HTMLResponse
@@ -606,6 +606,27 @@ class N8nCheckAgentMatchRequest(BaseModel):
     agent_name: str
     user_query: str
     threshold: Optional[float] = 0.3
+
+# GHL Webhook Models
+class GHLMessageWebhook(BaseModel):
+    """Model for incoming GHL message webhook"""
+    ghl_location_id: str
+    ghl_contact_id: str
+    message: str
+    sender_name: Optional[str] = None
+    sender_phone: Optional[str] = None
+    sender_email: Optional[str] = None
+    message_type: Optional[str] = "SMS"  # SMS, Facebook, Instagram, etc.
+    conversation_id: Optional[str] = None
+    timestamp: Optional[str] = None
+    metadata: Optional[dict] = None
+
+class NotificationResponse(BaseModel):
+    """Response model for notification endpoints"""
+    success: bool
+    notification_id: Optional[str] = None
+    message: Optional[str] = None
+    error: Optional[str] = None
 
 class N8nFindBestAgentsRequest(BaseModel):
     user_query: str
@@ -1275,6 +1296,189 @@ async def receive_stream_update(update: StreamUpdate):
     except Exception as e:
         logger.error(f"Error in receive_stream_update: {str(e)}")
         return {"status": "error", "error": str(e)}
+
+# GHL Message Webhook Endpoint
+@app.post("/api/webhooks/ghl/messages")
+async def receive_ghl_message(
+    webhook_data: GHLMessageWebhook,
+    request: Request,
+    x_ghl_signature: Optional[str] = Header(None)
+):
+    """
+    Webhook endpoint to receive messages from GHL
+    This will be called by GHL when a message is received
+    """
+    try:
+        # Optional: Verify webhook signature if GHL provides one
+        # You can set a webhook secret in GHL and verify it here
+        webhook_secret = os.getenv("GHL_WEBHOOK_SECRET")
+        if webhook_secret and x_ghl_signature:
+            # Verify the signature (implementation depends on GHL's signature method)
+            # This is a placeholder - adjust based on GHL's actual signature verification
+            pass
+        
+        logger.info(f"Received GHL message webhook: {webhook_data.model_dump()}")
+        
+        # Generate a unique notification ID
+        notification_id = str(uuid.uuid4())
+        
+        # Set timestamp if not provided
+        if not webhook_data.timestamp:
+            webhook_data.timestamp = datetime.now(timezone.utc).isoformat()
+        
+        # Store notification in database
+        notification_data = {
+            "id": notification_id,
+            "ghl_location_id": webhook_data.ghl_location_id,
+            "ghl_contact_id": webhook_data.ghl_contact_id,
+            "message_content": webhook_data.message,
+            "sender_name": webhook_data.sender_name,
+            "sender_phone": webhook_data.sender_phone,
+            "sender_email": webhook_data.sender_email,
+            "message_type": webhook_data.message_type,
+            "conversation_id": webhook_data.conversation_id,
+            "read_status": False,
+            "created_at": webhook_data.timestamp,
+            "metadata": webhook_data.metadata or {}
+        }
+        
+        # Insert into notifications table
+        result = supabase.table("notifications").insert(notification_data).execute()
+        
+        if result.data:
+            logger.info(f"Notification saved successfully: {notification_id}")
+            
+            # Find the user associated with this GHL location
+            # Query ghl_subaccounts table to find the user
+            user_result = supabase.table("ghl_subaccounts").select("firm_user_id").eq("ghl_location_id", webhook_data.ghl_location_id).execute()
+            
+            if user_result.data and len(user_result.data) > 0:
+                user_id = user_result.data[0]["firm_user_id"]
+                
+                # Send real-time notification via WebSocket if user is connected
+                for connection_id, websocket in active_connections.items():
+                    if connection_id.startswith(f"{user_id}_"):
+                        try:
+                            await websocket.send_json({
+                                "type": "notification",
+                                "notification_id": notification_id,
+                                "message": webhook_data.message,
+                                "sender_name": webhook_data.sender_name,
+                                "message_type": webhook_data.message_type,
+                                "timestamp": webhook_data.timestamp,
+                                "ghl_contact_id": webhook_data.ghl_contact_id
+                            })
+                            logger.info(f"Real-time notification sent to user {user_id}")
+                        except Exception as ws_error:
+                            logger.error(f"Error sending WebSocket notification: {ws_error}")
+            
+            return NotificationResponse(
+                success=True,
+                notification_id=notification_id,
+                message="Notification received and stored successfully"
+            )
+        else:
+            logger.error(f"Failed to save notification to database")
+            return NotificationResponse(
+                success=False,
+                error="Failed to save notification to database"
+            )
+            
+    except Exception as e:
+        logger.error(f"Error in receive_ghl_message: {str(e)}")
+        return NotificationResponse(
+            success=False,
+            error=str(e)
+        )
+
+# API endpoint to fetch notifications for a user
+@app.get("/api/notifications/{user_id}")
+async def get_user_notifications(
+    user_id: str,
+    limit: Optional[int] = 50,
+    offset: Optional[int] = 0,
+    unread_only: Optional[bool] = False
+):
+    """Get notifications for a specific user based on their GHL locations"""
+    try:
+        # First, get all GHL locations for this user
+        locations_result = supabase.table("ghl_subaccounts").select("ghl_location_id").eq("firm_user_id", user_id).execute()
+        
+        if not locations_result.data:
+            return {"notifications": [], "total": 0, "unread_count": 0}
+        
+        location_ids = [loc["ghl_location_id"] for loc in locations_result.data]
+        
+        # Build query for notifications
+        query = supabase.table("notifications").select("*").in_("ghl_location_id", location_ids)
+        
+        if unread_only:
+            query = query.eq("read_status", False)
+        
+        # Get total count
+        count_query = supabase.table("notifications").select("*", count="exact").in_("ghl_location_id", location_ids)
+        if unread_only:
+            count_query = count_query.eq("read_status", False)
+        count_result = count_query.execute()
+        
+        # Get unread count
+        unread_count_result = supabase.table("notifications").select("*", count="exact").in_("ghl_location_id", location_ids).eq("read_status", False).execute()
+        
+        # Get notifications with pagination
+        notifications_result = query.order("created_at", desc=True).limit(limit).offset(offset).execute()
+        
+        return {
+            "notifications": notifications_result.data,
+            "total": count_result.count if hasattr(count_result, 'count') else len(count_result.data),
+            "unread_count": unread_count_result.count if hasattr(unread_count_result, 'count') else len(unread_count_result.data),
+            "limit": limit,
+            "offset": offset
+        }
+        
+    except Exception as e:
+        logger.error(f"Error fetching notifications: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Mark notification as read
+@app.put("/api/notifications/{notification_id}/read")
+async def mark_notification_read(notification_id: str):
+    """Mark a notification as read"""
+    try:
+        result = supabase.table("notifications").update({"read_status": True}).eq("id", notification_id).execute()
+        
+        if result.data:
+            return {"success": True, "message": "Notification marked as read"}
+        else:
+            raise HTTPException(status_code=404, detail="Notification not found")
+            
+    except Exception as e:
+        logger.error(f"Error marking notification as read: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Mark all notifications as read for a user
+@app.put("/api/notifications/user/{user_id}/read-all")
+async def mark_all_notifications_read(user_id: str):
+    """Mark all notifications as read for a user"""
+    try:
+        # Get user's GHL locations
+        locations_result = supabase.table("ghl_subaccounts").select("ghl_location_id").eq("firm_user_id", user_id).execute()
+        
+        if not locations_result.data:
+            return {"success": True, "message": "No notifications to update"}
+        
+        location_ids = [loc["ghl_location_id"] for loc in locations_result.data]
+        
+        # Update all unread notifications
+        result = supabase.table("notifications").update({"read_status": True}).in_("ghl_location_id", location_ids).eq("read_status", False).execute()
+        
+        return {
+            "success": True,
+            "message": f"Marked {len(result.data)} notifications as read"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error marking all notifications as read: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
     
 @app.post("/api/website/analyze")
 async def analyze_website_endpoint(request: WebsiteAnalysisRequest):
