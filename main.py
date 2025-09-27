@@ -609,17 +609,20 @@ class N8nCheckAgentMatchRequest(BaseModel):
 
 # GHL Webhook Models
 class GHLMessageWebhook(BaseModel):
-    """Model for incoming GHL message webhook"""
+    """Model for incoming GHL message webhook - Updated to match actual payload"""
     ghl_location_id: str
     ghl_contact_id: str
-    message: str
-    sender_name: Optional[str] = None
-    sender_phone: Optional[str] = None
-    sender_email: Optional[str] = None
-    message_type: Optional[str] = "SMS"  # SMS, Facebook, Instagram, etc.
-    conversation_id: Optional[str] = None
+    contact_name: Optional[str] = None
+    contact_type: Optional[str] = None
+    user_message: str
+    social_media: Optional[str] = "SMS"  # SMS, Facebook, Instagram, etc.
+    user_message_attachment: Optional[str] = None
+    tag: Optional[str] = None
+    agent_message: Optional[str] = None
+    
+    # Optional fields that might come from GHL
     timestamp: Optional[str] = None
-    metadata: Optional[dict] = None
+    conversation_id: Optional[str] = None
 
 class NotificationResponse(BaseModel):
     """Response model for notification endpoints"""
@@ -1326,20 +1329,28 @@ async def receive_ghl_message(
         if not webhook_data.timestamp:
             webhook_data.timestamp = datetime.now(timezone.utc).isoformat()
         
-        # Store notification in database
+        # Store notification in database with proper field mapping
         notification_data = {
             "id": notification_id,
             "ghl_location_id": webhook_data.ghl_location_id,
             "ghl_contact_id": webhook_data.ghl_contact_id,
-            "message_content": webhook_data.message,
-            "sender_name": webhook_data.sender_name,
-            "sender_phone": webhook_data.sender_phone,
-            "sender_email": webhook_data.sender_email,
-            "message_type": webhook_data.message_type,
+            "message_content": webhook_data.user_message,
+            "sender_name": webhook_data.contact_name,
+            "sender_phone": None,  # Not provided in webhook
+            "sender_email": None,  # Not provided in webhook
+            "message_type": webhook_data.social_media,
             "conversation_id": webhook_data.conversation_id,
+            "contact_type": webhook_data.contact_type,
+            "message_attachment": webhook_data.user_message_attachment,
+            "tag": webhook_data.tag,
+            "agent_message": webhook_data.agent_message,
             "read_status": False,
+            "responded_status": False,
             "created_at": webhook_data.timestamp,
-            "metadata": webhook_data.metadata or {}
+            "metadata": {
+                "original_payload": webhook_data.model_dump(),  # Store original for debugging
+                "processed_at": datetime.now(timezone.utc).isoformat()
+            }
         }
         
         # Insert into notifications table
@@ -1362,11 +1373,17 @@ async def receive_ghl_message(
                             await websocket.send_json({
                                 "type": "notification",
                                 "notification_id": notification_id,
-                                "message": webhook_data.message,
-                                "sender_name": webhook_data.sender_name,
-                                "message_type": webhook_data.message_type,
+                                "message": webhook_data.user_message,
+                                "sender_name": webhook_data.contact_name,
+                                "message_type": webhook_data.social_media,
                                 "timestamp": webhook_data.timestamp,
-                                "ghl_contact_id": webhook_data.ghl_contact_id
+                                "ghl_contact_id": webhook_data.ghl_contact_id,
+                                "metadata": {
+                                    "contact_type": webhook_data.contact_type,
+                                    "user_message_attachment": webhook_data.user_message_attachment,
+                                    "tag": webhook_data.tag,
+                                    "agent_message": webhook_data.agent_message
+                                }
                             })
                             logger.info(f"Real-time notification sent to user {user_id}")
                         except Exception as ws_error:
