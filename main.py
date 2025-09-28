@@ -1357,25 +1357,36 @@ async def receive_ghl_message(
         if result.data:
             logger.info(f"Notification saved successfully: {notification_id}")
             
+            # Get the inserted notification with auto-generated fields
+            inserted_notification = result.data[0] if result.data else {}
+            conversation_id = inserted_notification.get("conversation_id", "")
+            
             # Find the user associated with this GHL location
             # Query ghl_subaccounts table to find the user
             user_result = supabase.table("ghl_subaccounts").select("firm_user_id").eq("ghl_location_id", webhook_data.ghl_location_id).execute()
             
             if user_result.data and len(user_result.data) > 0:
                 user_id = user_result.data[0]["firm_user_id"]
+                logger.info(f"Found user {user_id} for location {webhook_data.ghl_location_id}")
+                
+                # Log active connections for debugging
+                logger.info(f"Active WebSocket connections: {list(active_connections.keys())}")
                 
                 # Send real-time notification via WebSocket if user is connected
+                connections_found = 0
                 for connection_id, websocket in active_connections.items():
                     if connection_id.startswith(f"{user_id}_"):
                         try:
                             await websocket.send_json({
                                 "type": "notification",
                                 "notification_id": notification_id,
+                                "ghl_location_id": webhook_data.ghl_location_id,
+                                "ghl_contact_id": webhook_data.ghl_contact_id,
                                 "message": webhook_data.user_message,
                                 "sender_name": webhook_data.contact_name,
                                 "message_type": webhook_data.social_media,
+                                "conversation_id": conversation_id,  # Added conversation_id
                                 "timestamp": datetime.now(timezone.utc).isoformat(),
-                                "ghl_contact_id": webhook_data.ghl_contact_id,
                                 "metadata": {
                                     "contact_type": webhook_data.contact_type,
                                     "user_message_attachment": webhook_data.user_message_attachment,
@@ -1383,9 +1394,15 @@ async def receive_ghl_message(
                                     "agent_message": webhook_data.agent_message
                                 }
                             })
-                            logger.info(f"Real-time notification sent to user {user_id}")
+                            connections_found += 1
+                            logger.info(f"Real-time notification sent to user {user_id} via connection {connection_id}")
                         except Exception as ws_error:
                             logger.error(f"Error sending WebSocket notification: {ws_error}")
+                
+                if connections_found == 0:
+                    logger.warning(f"No active WebSocket connections found for user {user_id}")
+            else:
+                logger.warning(f"No user mapping found for location {webhook_data.ghl_location_id}")
             
             return NotificationResponse(
                 success=True,
