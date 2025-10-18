@@ -28,6 +28,8 @@ from PIL import Image
 # Local imports
 from Website.web_scrape import capture_website_screenshot, get_website_favicon_async
 from invitation_handler import InvitationHandler
+from file_processing_service import FileProcessingService
+from background_text_processor import get_background_processor
 
 # Handler classes
 
@@ -551,6 +553,7 @@ conversational_handler = ConversationalHandler(
 )
 # client_kb_manager = ClientKBManager(supabase_client=supabase)  # Removed
 # dynamic_agent_kb_handler = DynamicAgentKBHandler(supabase_client=supabase)  # Removed
+file_processing_service = FileProcessingService(supabase_client=supabase)
 
 print("Application initialized")
 
@@ -5822,6 +5825,132 @@ async def run_facebook_retry_automation(firm_user_id: str, location_id: str):
 
 # ============================================================================
 # END BUSINESS SETUP WORKFLOW
+# ============================================================================
+
+# ============================================================================
+# FILE PROCESSING ENDPOINT - Simplified Approach
+# ============================================================================
+
+@app.post("/api/file/process")
+async def process_file_from_url(
+    background_tasks: BackgroundTasks,
+    firm_user_id: str = Form(...),
+    file_name: str = Form(...),
+    file_url: str = Form(...),
+    agent_id: str = Form(...),
+    agent_name: str = Form(...)
+):
+    """
+    Accept file storage URL from frontend and process in background
+    
+    Parameters:
+    - firm_user_id: User ID from frontend
+    - file_name: Original filename
+    - file_url: Supabase storage URL (already uploaded by frontend)
+    - agent_id: Agent ID from YAML config
+    - agent_name: Agent name from YAML config
+    
+    Returns:
+    - Immediate "thanks" response with file_id for tracking
+    """
+    try:
+        logger.info(f"File processing request from user {firm_user_id}: {file_name}")
+        
+        # Validate required fields
+        if not all([firm_user_id, file_name, file_url, agent_id, agent_name]):
+            raise HTTPException(status_code=400, detail="All fields are required")
+        
+        # Create processing record
+        result = await file_processing_service.create_processing_record(
+            firm_user_id=firm_user_id,
+            file_name=file_name,
+            file_url=file_url,
+            agent_id=agent_id,
+            agent_name=agent_name
+        )
+        
+        if not result["success"]:
+            logger.error(f"Failed to create processing record: {result['error']}")
+            raise HTTPException(status_code=500, detail=f"Failed to create record: {result['error']}")
+        
+        file_id = result["file_id"]
+        logger.info(f"Created processing record: {file_id}")
+        
+        # Start background text extraction
+        processor = get_background_processor(file_processing_service)
+        background_tasks.add_task(processor.process_file, file_id)
+        
+        # Return immediate success response
+        return {
+            "success": True,
+            "message": "Thank you! Your file has been received and is being processed.",
+            "data": {
+                "file_id": file_id,
+                "firm_user_id": firm_user_id,
+                "file_name": file_name,
+                "agent_id": agent_id,
+                "agent_name": agent_name,
+                "status": "processing_started",
+                "processing_url": f"/api/file/status/{file_id}"
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in file processing endpoint: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+@app.get("/api/file/status/{file_id}")
+async def get_file_processing_status(file_id: str):
+    """Get processing status for a file"""
+    try:
+        result = await file_processing_service.get_processing_record(file_id)
+        
+        if not result["success"]:
+            raise HTTPException(status_code=404, detail="File not found")
+        
+        data = result["data"]
+        
+        return {
+            "success": True,
+            "data": {
+                "file_id": data["file_id"],
+                "file_name": data["file_name"],
+                "agent_id": data["agent_id"],
+                "agent_name": data["agent_name"],
+                "status": data["processing_status"],
+                "extracted_text": data.get("extracted_text"),
+                "error_message": data.get("error_message"),
+                "created_at": data["created_at"],
+                "updated_at": data["updated_at"]
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting file status: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/files/user/{firm_user_id}")
+async def get_user_files(firm_user_id: str, agent_id: Optional[str] = None):
+    """Get all processed files for a user"""
+    try:
+        result = await file_processing_service.get_user_files(firm_user_id, agent_id)
+        
+        return {
+            "success": True,
+            "data": result["data"],
+            "count": result["count"]
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting user files: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ============================================================================
+# END FILE PROCESSING
 # ============================================================================
 
 app.add_middleware(
