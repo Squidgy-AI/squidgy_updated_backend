@@ -29,7 +29,7 @@ from PIL import Image
 from Website.web_scrape import capture_website_screenshot, get_website_favicon_async
 from invitation_handler import InvitationHandler
 from file_processing_service import FileProcessingService
-from background_text_processor import get_background_processor
+from background_text_processor import get_background_processor, initialize_background_processor
 
 # Handler classes
 
@@ -554,6 +554,7 @@ conversational_handler = ConversationalHandler(
 # client_kb_manager = ClientKBManager(supabase_client=supabase)  # Removed
 # dynamic_agent_kb_handler = DynamicAgentKBHandler(supabase_client=supabase)  # Removed
 file_processing_service = FileProcessingService(supabase_client=supabase)
+background_processor = initialize_background_processor(supabase_client=supabase)
 
 print("Application initialized")
 
@@ -5877,7 +5878,7 @@ async def process_file_from_url(
         logger.info(f"Created processing record: {file_id}")
         
         # Start background text extraction
-        processor = get_background_processor(file_processing_service)
+        processor = get_background_processor()
         background_tasks.add_task(processor.process_file, file_id)
         
         # Return immediate success response
@@ -5951,6 +5952,158 @@ async def get_user_files(firm_user_id: str, agent_id: Optional[str] = None):
 
 # ============================================================================
 # END FILE PROCESSING
+# ============================================================================
+
+# ============================================================================
+# KNOWLEDGE BASE ENDPOINTS
+# ============================================================================
+
+@app.post("/api/knowledge-base/text")
+async def save_text_knowledge(
+    firm_user_id: str = Form(...),
+    agent_id: str = Form(...),
+    agent_name: str = Form(...),
+    text_content: str = Form(...)
+):
+    """
+    Save text content (voice/manual input) to knowledge base
+    
+    Parameters:
+    - firm_user_id: User ID
+    - agent_id: Agent ID from YAML config
+    - agent_name: Agent name from YAML config
+    - text_content: User's text input (voice or manual)
+    
+    Returns:
+    - Success response with record ID
+    """
+    try:
+        logger.info(f"Saving text knowledge for user {firm_user_id}, agent {agent_id}")
+        
+        # Validate required fields
+        if not all([firm_user_id, agent_id, agent_name, text_content.strip()]):
+            raise HTTPException(status_code=400, detail="All fields are required and text cannot be empty")
+        
+        # Generate unique file_id for text entry
+        file_id = f"text_{uuid.uuid4().hex[:12]}"
+        
+        # Insert into firm_users_knowledge_base table
+        result = supabase.table("firm_users_knowledge_base").insert({
+            "firm_user_id": firm_user_id,
+            "file_id": file_id,
+            "file_name": "User Input",
+            "file_url": "",  # Empty for text input
+            "agent_id": agent_id,
+            "agent_name": agent_name,
+            "extracted_text": text_content.strip(),
+            "processing_status": "completed",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }).execute()
+        
+        if not result.data:
+            raise HTTPException(status_code=500, detail="Failed to save text knowledge")
+        
+        logger.info(f"Text knowledge saved successfully: {file_id}")
+        
+        return {
+            "success": True,
+            "message": "Text knowledge saved successfully",
+            "file_id": file_id,
+            "processing_status": "completed"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error saving text knowledge: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/knowledge-base/file")
+async def save_file_knowledge(
+    background_tasks: BackgroundTasks,
+    firm_user_id: str = Form(...),
+    file_name: str = Form(...),
+    file_url: str = Form(...),
+    agent_id: str = Form(...),
+    agent_name: str = Form(...)
+):
+    """
+    Save file upload to knowledge base and process in background
+    
+    Parameters:
+    - firm_user_id: User ID
+    - file_name: Original filename
+    - file_url: Supabase storage URL
+    - agent_id: Agent ID from YAML config
+    - agent_name: Agent name from YAML config
+    
+    Returns:
+    - Immediate response with file_id for tracking
+    """
+    try:
+        logger.info(f"Saving file knowledge for user {firm_user_id}: {file_name}")
+        
+        # Validate required fields
+        if not all([firm_user_id, file_name, file_url, agent_id, agent_name]):
+            raise HTTPException(status_code=400, detail="All fields are required")
+        
+        # Create processing record in knowledge base table
+        result = await file_processing_service.create_processing_record(
+            firm_user_id=firm_user_id,
+            file_name=file_name,
+            file_url=file_url,
+            agent_id=agent_id,
+            agent_name=agent_name
+        )
+        
+        if not result["success"]:
+            logger.error(f"Failed to create knowledge base record: {result['error']}")
+            raise HTTPException(status_code=500, detail=f"Failed to create record: {result['error']}")
+        
+        file_id = result["file_id"]
+        logger.info(f"Created knowledge base record: {file_id}")
+        
+        # Start background text extraction
+        processor = get_background_processor()
+        background_tasks.add_task(processor.process_file, file_id)
+        
+        return {
+            "success": True,
+            "message": "File uploaded to knowledge base successfully",
+            "file_id": file_id,
+            "processing_status": "pending"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error saving file knowledge: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/knowledge-base/{agent_id}")
+async def get_agent_knowledge(agent_id: str, firm_user_id: Optional[str] = None):
+    """Get all knowledge base entries for an agent"""
+    try:
+        query = supabase.table("firm_users_knowledge_base").select("*").eq("agent_id", agent_id)
+        
+        if firm_user_id:
+            query = query.eq("firm_user_id", firm_user_id)
+        
+        result = query.order("created_at", desc=True).execute()
+        
+        return {
+            "success": True,
+            "data": result.data,
+            "count": len(result.data)
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting agent knowledge: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ============================================================================
+# END KNOWLEDGE BASE ENDPOINTS
 # ============================================================================
 
 app.add_middleware(
