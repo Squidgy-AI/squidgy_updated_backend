@@ -524,7 +524,7 @@ _requests_lock = threading.Lock()
 
 # Environment variables
 SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 PERPLEXITY_API_KEY = os.getenv("PERPLEXITY_API_KEY")
 # OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 N8N_MAIN = os.getenv("N8N_MAIN", "https://n8n.theaiteam.uk/webhook/c2fcbad6-abc0-43af-8aa8-d1661ff4461d")
@@ -535,7 +535,7 @@ print(f"Using Supabase URL: {SUPABASE_URL}")
 
 # Initialize Supabase client
 def create_supabase_client() -> Client:
-    return create_client(SUPABASE_URL, SUPABASE_KEY)
+    return create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
 # Initialize handlers
 active_requests: Set[str] = set()
