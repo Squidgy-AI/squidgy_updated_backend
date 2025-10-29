@@ -650,8 +650,12 @@ class HighLevelRetryAutomation:
             print("\n[💾 DATABASE] Updating facebook_integrations table with tokens...")
             
             # Initialize Supabase client
-            supabase_url = "https://aoteeitreschwzkbpqyd.supabase.co"
-            supabase_key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFvdGVlaXRyZXNjaHd6a2JwcXlkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDQxMjAwMzQsImV4cCI6MjA1OTY5NjAzNH0.S7P9-G4CaSE6DWycNq0grv-x6UCIsfLvXooCtMwaKHM"
+            supabase_url = os.getenv('SUPABASE_URL')
+            supabase_key = os.getenv('SUPABASE_SERVICE_KEY')
+            if not supabase_url or not supabase_key:
+                print("[❌ DATABASE] SUPABASE_URL or SUPABASE_SERVICE_KEY not found in environment variables")
+                return False
+                
             supabase: Client = create_client(supabase_url, supabase_key)
             
             # Decode access token to get expiry
