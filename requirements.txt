@@ -29,3 +29,11 @@ python-multipart==0.0.9
 # Document text extraction
 PyPDF2==3.0.1
 python-docx==1.1.0
+
+# MCP (Model Context Protocol) dependencies
+# Security scanning tools
+bandit==1.7.5
+safety==2.3.5
+
+# System monitoring
+psutil==5.9.6

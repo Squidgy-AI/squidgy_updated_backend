@@ -1,0 +1,255 @@
+{
+  "name": "Community GitHub MCPs",
+  "description": "Community-contributed MCP servers requiring security validation",
+  "trust_level": "COMMUNITY",
+  "mcps": {
+    "instagram": {
+      "url": "https://github.com/jlbadano/ig-mcp",
+      "name": "instagram-tools",
+      "description": "Instagram automation and posting tools",
+      "enabled": true,
+      "auto_approve": false,
+      "security_scan": true,
+      "sandbox": true,
+      "max_risk_score": 30,
+      "tags": [
+        "instagram",
+        "social-media",
+        "automation"
+      ],
+      "capabilities": [
+        "instagram_post",
+        "get_profile_info",
+        "upload_image"
+      ],
+      "env_required": [
+        "INSTAGRAM_USERNAME",
+        "INSTAGRAM_PASSWORD"
+      ],
+      "_approval_date": "2025-11-01T13:05:52.223097",
+      "_approved_by": "somasekharaddakula",
+      "_approval_note": "Approved via validation script"
+    },
+    "weather": {
+      "url": "https://github.com/example/weather-mcp-server",
+      "name": "weather-tools",
+      "description": "Weather information and forecasting",
+      "enabled": false,
+      "auto_approve": false,
+      "security_scan": true,
+      "sandbox": true,
+      "max_risk_score": 20,
+      "tags": [
+        "weather",
+        "forecast",
+        "api"
+      ],
+      "capabilities": [
+        "get_current_weather",
+        "get_forecast", 
+        "get_weather_alerts"
+      ],
+      "env_required": [
+        "WEATHER_API_KEY"
+      ]
+    },
+    "email": {
+      "url": "https://github.com/example/email-mcp-server",
+      "name": "email-tools",
+      "description": "Email sending and management tools",
+      "enabled": false,
+      "auto_approve": false,
+      "security_scan": true,
+      "sandbox": true,
+      "max_risk_score": 25,
+      "tags": [
+        "email",
+        "smtp",
+        "communication"
+      ],
+      "capabilities": [
+        "send_email",
+        "read_inbox",
+        "create_draft"
+      ],
+      "env_required": [
+        "SMTP_SERVER",
+        "EMAIL_PASSWORD"
+      ]
+    },
+    "pdf": {
+      "url": "https://github.com/example/pdf-mcp-server",
+      "name": "pdf-tools",
+      "description": "PDF generation and manipulation tools",
+      "enabled": true,
+      "auto_approve": false,
+      "security_scan": true,
+      "sandbox": true,
+      "max_risk_score": 15,
+      "tags": [
+        "pdf",
+        "documents",
+        "generation"
+      ],
+      "capabilities": [
+        "create_pdf",
+        "merge_pdfs",
+        "extract_text",
+        "add_watermark"
+      ],
+      "_approval_date": "2025-11-01T13:06:04.135304",
+      "_approved_by": "somasekharaddakula",
+      "_approval_note": "Approved via validation script"
+    },
+    "slack": {
+      "url": "https://github.com/example/slack-mcp-server",
+      "name": "slack-tools",
+      "description": "Slack messaging and workspace automation",
+      "enabled": false,
+      "auto_approve": false,
+      "security_scan": true,
+      "sandbox": true,
+      "max_risk_score": 20,
+      "tags": [
+        "slack",
+        "messaging",
+        "automation"
+      ],
+      "capabilities": [
+        "send_message",
+        "create_channel",
+        "invite_user",
+        "get_messages"
+      ],
+      "env_required": [
+        "SLACK_BOT_TOKEN"
+      ]
+    }
+  },
+
+
+
+
+  
+  
+  "_documentation": {
+    "title": "COMMUNITY MCP CONFIGURATION",
+    "description": "Community-contributed MCP servers requiring security validation",
+    
+    "usage_instructions": {
+      "adding_new_mcp": [
+        "1. Copy existing MCP block from 'mcps' section",
+        "2. Modify URL, name, description as needed",
+        "3. Set 'enabled': false initially",
+        "4. Community MCPs require security scanning",
+        "5. Must be approved before enabling"
+      ],
+      "validation": "python scripts/validate_mcp_configs.py",
+      "approval": "python scripts/validate_mcp_configs.py --approve mcp-name",
+      "loading": "python mcp_cli.py load --config community",
+      "listing": "python mcp_cli.py list --category community",
+      "deletion": "Remove entire MCP block and reload config"
+    },
+    
+    "security_workflow": [
+      "1. Add MCP with 'enabled': false",
+      "2. Validate: python scripts/validate_mcp_configs.py",
+      "3. Manual security review of GitHub repository",
+      "4. If safe, approve: python scripts/validate_mcp_configs.py --approve mcp-name",
+      "5. Enable: Set 'enabled': true",
+      "6. Strict validation: python scripts/validate_mcp_configs.py --strict",
+      "7. Load: python mcp_cli.py load --config community"
+    ],
+    
+    "field_descriptions": {
+      "url": "GitHub repository URL of the MCP server",
+      "name": "Unique identifier for the MCP (used in commands)",
+      "description": "Human-readable description of what the MCP does",
+      "enabled": "true = load MCP, false = skip loading",
+      "auto_approve": "MUST be false for community MCPs",
+      "security_scan": "MUST be true for community MCPs",
+      "sandbox": "MUST be true for community MCPs (isolated execution)",
+      "max_risk_score": "Maximum allowed security risk score (0-100)",
+      "tags": "Array of keywords for categorization",
+      "capabilities": "Array of tool names this MCP provides",
+      "env_required": "Environment variables needed at RUNTIME",
+      "_approval_date": "AUTO-ADDED: When MCP was approved",
+      "_approved_by": "AUTO-ADDED: Who approved the MCP",
+      "_approval_note": "AUTO-ADDED: Approval note"
+    },
+    
+    "template_for_new_mcp": {
+      "new_mcp_key": {
+        "url": "https://github.com/username/mcp-server-name",
+        "name": "new-mcp-tools",
+        "description": "Description of what this MCP does",
+        "enabled": false,
+        "auto_approve": false,
+        "security_scan": true,
+        "sandbox": true,
+        "max_risk_score": 30,
+        "tags": ["category", "keyword"],
+        "capabilities": ["tool1", "tool2"],
+        "env_required": ["API_KEY", "PASSWORD"]
+      }
+    },
+    
+    "security_requirements": {
+      "mandatory_fields": {
+        "auto_approve": "MUST be false",
+        "security_scan": "MUST be true", 
+        "sandbox": "MUST be true",
+        "max_risk_score": "MUST be 0-100 integer"
+      },
+      "approval_required": "All enabled community MCPs MUST have approval metadata",
+      "scan_process": [
+        "1. Repository is cloned securely",
+        "2. Static analysis with Bandit",
+        "3. Dependency vulnerability scan with Safety",
+        "4. Code quality and structure analysis",
+        "5. Risk score calculation (0-100)",
+        "6. Auto-approve if score <= max_risk_score, else manual review"
+      ],
+      "sandbox_isolation": [
+        "1. Limited memory and CPU resources",
+        "2. Restricted file system access",
+        "3. Network access controls",
+        "4. No direct system access",
+        "5. Process isolation"
+      ]
+    },
+    
+    "management_commands": {
+      "validate": "python scripts/validate_mcp_configs.py",
+      "strict_validate": "python scripts/validate_mcp_configs.py --strict",
+      "approve_mcp": "python scripts/validate_mcp_configs.py --approve mcp-name",
+      "load_community": "python mcp_cli.py load --config community",
+      "list_community": "python mcp_cli.py list --category community",
+      "add_new": "python mcp_cli.py add https://github.com/user/repo new-name --enabled",
+      "check_tools": "curl http://localhost:8000/api/v1/mcp/tools"
+    },
+    
+    "troubleshooting": {
+      "validation_fails": [
+        "Issue: Validation fails with missing fields",
+        "Solution: Ensure all required fields are present",
+        "Check: python scripts/validate_mcp_configs.py"
+      ],
+      "strict_mode_fails": [
+        "Issue: Strict mode fails for enabled MCP",
+        "Solution: Approve the MCP first",
+        "Command: python scripts/validate_mcp_configs.py --approve mcp-name"
+      ],
+      "security_scan_fails": [
+        "Issue: Security scan tools not found",
+        "Solution: Install security tools: pip install bandit safety",
+        "Note: Scanning happens during MCP loading, not validation"
+      ],
+      "env_vars_missing": [
+        "Issue: Tools fail with missing environment variables",
+        "Solution: Set required env vars before calling tools",
+        "Note: Env vars are for RUNTIME, not for loading MCPs"
+      ]
+    }
+  }
+}

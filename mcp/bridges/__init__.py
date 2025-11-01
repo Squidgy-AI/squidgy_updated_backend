@@ -1,0 +1,1 @@
+# MCP Bridges - Bridge existing Tools/ functionality as MCP tools

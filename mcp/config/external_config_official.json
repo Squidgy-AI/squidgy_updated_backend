@@ -1,0 +1,156 @@
+{
+  "name": "Official Anthropic MCPs",
+  "description": "Pre-vetted official MCP servers from Anthropic",
+  "trust_level": "OFFICIAL",
+  "mcps": {
+    "filesystem": {
+      "url": "https://github.com/anthropics/mcp-server-filesystem",
+      "name": "filesystem-tools",
+      "description": "File system operations (read, write, list directories)",
+      "enabled": true,
+      "auto_approve": true,
+      "security_scan": false,
+      "sandbox": false,
+      "tags": ["filesystem", "files", "directories"],
+      "capabilities": [
+        "read_file",
+        "write_file", 
+        "list_directory",
+        "create_directory",
+        "delete_file"
+      ]
+    },
+    "sqlite": {
+      "url": "https://github.com/anthropics/mcp-server-sqlite",
+      "name": "sqlite-tools", 
+      "description": "SQLite database operations",
+      "enabled": true,
+      "auto_approve": true,
+      "security_scan": false,
+      "sandbox": false,
+      "tags": ["database", "sqlite", "sql"],
+      "capabilities": [
+        "execute_query",
+        "create_table",
+        "insert_data",
+        "update_data"
+      ]
+    },
+    "brave_search": {
+      "url": "https://github.com/anthropics/mcp-server-brave-search",
+      "name": "search-tools",
+      "description": "Web search using Brave Search API",
+      "enabled": false,
+      "auto_approve": true,
+      "security_scan": false,
+      "sandbox": false,
+      "tags": ["search", "web", "brave"],
+      "capabilities": [
+        "web_search",
+        "search_news",
+        "search_images"
+      ],
+      "env_required": ["BRAVE_API_KEY"]
+    },
+    "github": {
+      "url": "https://github.com/anthropics/mcp-server-github",
+      "name": "github-tools",
+      "description": "GitHub API operations",
+      "enabled": false,
+      "auto_approve": true,
+      "security_scan": false,
+      "sandbox": false,
+      "tags": ["github", "git", "repositories"],
+      "capabilities": [
+        "create_repository",
+        "list_repositories",
+        "create_issue",
+        "get_file_contents"
+      ],
+      "env_required": ["GITHUB_TOKEN"]
+    },
+    "git": {
+      "url": "https://github.com/anthropics/mcp-server-git",
+      "name": "git-tools",
+      "description": "Git version control operations",
+      "enabled": true,
+      "auto_approve": true,
+      "security_scan": false,
+      "sandbox": false,
+      "tags": ["git", "version-control", "repositories"],
+      "capabilities": [
+        "git_log",
+        "git_diff",
+        "git_status",
+        "git_commit"
+      ]
+    }
+  },
+
+
+
+  
+  
+  "_documentation": {
+    "title": "OFFICIAL MCP CONFIGURATION",
+    "description": "Pre-vetted, trusted MCP servers from Anthropic and verified organizations",
+    
+    "usage_instructions": {
+      "adding_new_mcp": [
+        "1. Copy existing MCP block from 'mcps' section",
+        "2. Modify URL, name, description as needed",
+        "3. Set 'enabled': true to activate",
+        "4. Official MCPs skip security scanning"
+      ],
+      "validation": "python scripts/validate_mcp_configs.py",
+      "loading": "python mcp_cli.py load --config official",
+      "listing": "python mcp_cli.py list --category official",
+      "disabling": "Set 'enabled': false in MCP config and reload"
+    },
+    
+    "field_descriptions": {
+      "url": "GitHub repository URL of the MCP server",
+      "name": "Unique identifier for the MCP (used in commands)",
+      "description": "Human-readable description of what the MCP does",
+      "enabled": "true = load MCP, false = skip loading",
+      "auto_approve": "true = skip manual approval (safe for official)",
+      "security_scan": "false = skip security scanning (trusted)",
+      "sandbox": "false = run with full permissions (trusted)",
+      "tags": "Array of keywords for categorization",
+      "capabilities": "Array of tool names this MCP provides",
+      "env_required": "Environment variables needed at RUNTIME (not for loading)"
+    },
+    
+    "template_for_new_mcp": {
+      "new_mcp_key": {
+        "url": "https://github.com/anthropics/mcp-server-example",
+        "name": "example-tools",
+        "description": "Example MCP server description",
+        "enabled": false,
+        "auto_approve": true,
+        "security_scan": false,
+        "sandbox": false,
+        "tags": ["example", "official"],
+        "capabilities": ["example_tool1", "example_tool2"],
+        "env_required": ["EXAMPLE_API_KEY"]
+      }
+    },
+    
+    "management_commands": {
+      "validate": "python scripts/validate_mcp_configs.py",
+      "load_official": "python mcp_cli.py load --config official",
+      "list_official": "python mcp_cli.py list --category official",
+      "enable_mcp": "Set 'enabled': true in config, then reload",
+      "disable_mcp": "Set 'enabled': false in config, then reload",
+      "check_tools": "curl http://localhost:8000/api/v1/mcp/tools"
+    },
+    
+    "security_notes": {
+      "trust_level": "OFFICIAL MCPs are pre-vetted and trusted",
+      "no_scanning": "Security scanning is disabled for official MCPs",
+      "full_permissions": "Official MCPs run with full system permissions",
+      "auto_approval": "No manual approval required for official MCPs",
+      "source_verification": "Only add MCPs from github.com/anthropics/* or verified sources"
+    }
+  }
+}

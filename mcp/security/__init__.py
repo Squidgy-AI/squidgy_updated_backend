@@ -1,0 +1,1 @@
+# MCP Security - Security scanning and validation for external MCPs

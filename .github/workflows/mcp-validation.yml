@@ -1,0 +1,107 @@
+name: MCP Configuration Validation
+
+on:
+  push:
+    paths:
+      - 'mcp/config/*.json'
+  pull_request:
+    paths:
+      - 'mcp/config/*.json'
+
+jobs:
+  validate-mcp-configs:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        
+    - name: Validate MCP configurations
+      run: |
+        python scripts/validate_mcp_configs.py
+        
+    - name: Check for enabled community MCPs
+      run: |
+        # Check if any community MCPs are being enabled
+        if grep -q '"enabled": true' mcp/config/external_config_github_public.json; then
+          echo "⚠️ Community MCPs are being enabled. Ensure they are properly reviewed and approved."
+          echo "Enabled MCPs:"
+          grep -B 5 -A 1 '"enabled": true' mcp/config/external_config_github_public.json || true
+        fi
+        
+    - name: Security scan validation
+      run: |
+        # Validate that all enabled community MCPs have proper security configuration
+        python -c "
+        import json
+        with open('mcp/config/external_config_github_public.json') as f:
+            config = json.load(f)
+        
+        enabled_mcps = []
+        for key, mcp in config['mcps'].items():
+            if mcp.get('enabled', False):
+                enabled_mcps.append(mcp['name'])
+                if not mcp.get('security_scan', False):
+                    print(f'❌ {mcp[\"name\"]} is enabled but lacks security_scan: true')
+                    exit(1)
+                if not mcp.get('sandbox', True):
+                    print(f'⚠️ {mcp[\"name\"]} is enabled without sandboxing')
+        
+        if enabled_mcps:
+            print(f'✅ Enabled community MCPs with proper security: {enabled_mcps}')
+        else:
+            print('ℹ️ No community MCPs are enabled')
+        "
+        
+    - name: Comment on PR (if applicable)
+      if: github.event_name == 'pull_request'
+      uses: actions/github-script@v6
+      with:
+        script: |
+          const fs = require('fs');
+          
+          // Check if community config was modified
+          if (fs.existsSync('mcp/config/external_config_github_public.json')) {
+            const config = JSON.parse(fs.readFileSync('mcp/config/external_config_github_public.json'));
+            const enabledMcps = [];
+            
+            for (const [key, mcp] of Object.entries(config.mcps)) {
+              if (mcp.enabled) {
+                enabledMcps.push(`- **${mcp.name}**: ${mcp.description}`);
+              }
+            }
+            
+            if (enabledMcps.length > 0) {
+              const body = `## 🔒 MCP Security Review Required
+              
+              This PR enables the following community MCPs:
+              
+              ${enabledMcps.join('\n')}
+              
+              **Security Checklist:**
+              - [ ] MCPs have been security scanned
+              - [ ] Risk scores are within acceptable limits
+              - [ ] Sandbox configuration is enabled
+              - [ ] Environment requirements are documented
+              - [ ] Manual security review completed
+              
+              ⚠️ **Do not merge until security review is complete!**`;
+              
+              github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: body
+              });
+            }
+          }

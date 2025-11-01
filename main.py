@@ -6106,6 +6106,44 @@ async def get_agent_knowledge(agent_id: str, firm_user_id: Optional[str] = None)
 # END KNOWLEDGE BASE ENDPOINTS
 # ============================================================================
 
+# ============================================================================
+# MCP (Model Context Protocol) INTEGRATION
+# ============================================================================
+
+# Import MCP components
+try:
+    from mcp.server import MCPGateway
+    
+    # Initialize MCP Gateway
+    mcp_gateway = MCPGateway(supabase)
+    
+    # Add MCP routes
+    app.include_router(mcp_gateway.router, prefix="/api/v1/mcp", tags=["MCP"])
+    
+    # Initialize MCP system (will be called manually after app startup)
+    async def initialize_mcp():
+        """Initialize MCP system"""
+        try:
+            await mcp_gateway.initialize()
+            logger.info("MCP system initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize MCP system: {e}")
+    
+    # Schedule MCP initialization
+    async def setup_mcp():
+        await initialize_mcp()
+    
+    logger.info("MCP integration loaded successfully")
+    
+except ImportError as e:
+    logger.warning(f"MCP integration not available: {e}")
+except Exception as e:
+    logger.error(f"Error loading MCP integration: {e}")
+
+# ============================================================================
+# END MCP INTEGRATION
+# ============================================================================
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

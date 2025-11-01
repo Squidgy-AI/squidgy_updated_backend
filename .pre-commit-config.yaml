@@ -1,0 +1,55 @@
+# Pre-commit configuration for MCP security validation
+repos:
+  # Local hooks for MCP validation
+  - repo: local
+    hooks:
+      # MCP Configuration Validation
+      - id: validate-mcp-configs
+        name: Validate MCP Configurations
+        entry: python scripts/validate_mcp_configs.py
+        language: system
+        files: ^mcp/config/.*\.json$
+        pass_filenames: false
+        always_run: false
+        description: "Validates MCP configuration files for security compliance"
+        
+      # JSON syntax validation
+      - id: check-json
+        name: Check JSON syntax
+        entry: python -m json.tool
+        language: system
+        files: ^mcp/config/.*\.json$
+        
+      # Prevent commits of enabled community MCPs without approval
+      - id: check-enabled-community-mcps
+        name: Check enabled community MCPs
+        entry: bash -c 'python scripts/validate_mcp_configs.py --strict'
+        language: system
+        files: ^mcp/config/external_config_github_public\.json$
+        pass_filenames: false
+        always_run: false
+
+  # Standard pre-commit hooks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.4.0
+    hooks:
+      - id: trailing-whitespace
+        files: ^mcp/config/.*\.json$
+      - id: end-of-file-fixer
+        files: ^mcp/config/.*\.json$
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ['--maxkb=1000']
+        
+  # Python specific hooks for MCP scripts
+  - repo: https://github.com/psf/black
+    rev: 23.3.0
+    hooks:
+      - id: black
+        files: ^(mcp/|scripts/).*\.py$
+        
+  - repo: https://github.com/pycqa/isort
+    rev: 5.12.0
+    hooks:
+      - id: isort
+        files: ^(mcp/|scripts/).*\.py$
