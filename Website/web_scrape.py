@@ -201,6 +201,173 @@ def get_website_favicon(url: str, session_id: str = None) -> dict:
 
 async def get_website_favicon_async(url: str, session_id: str = None) -> dict:
     """
+    Simple and reliable favicon capture using Playwright browser automation.
+    Gets the favicon exactly as it appears in the browser tab.
+    """
+    print(f"Getting favicon from browser tab for URL: {url}, session_id: {session_id}")
+    
+    try:
+        # Create filename
+        if session_id:
+            filename = f"{session_id}_logo.jpg"
+        else:
+            filename = f"logo_{int(time.time())}.jpg"
+        
+        async with async_playwright() as p:
+            # Launch browser in headless mode
+            browser = await p.chromium.launch(
+                headless=True,
+                args=[
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox',
+                    '--disable-dev-shm-usage',
+                    '--disable-extensions',
+                    '--disable-gpu',
+                    '--no-first-run',
+                    '--no-default-browser-check',
+                    '--disable-default-apps'
+                ]
+            )
+            
+            page = await browser.new_page()
+            
+            # Set a realistic user agent
+            await page.set_user_agent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+            
+            try:
+                # Navigate to the website with a reasonable timeout
+                await page.goto(url, timeout=30000, wait_until='domcontentloaded')
+                
+                # Wait a bit for favicon to load
+                await page.wait_for_timeout(2000)
+                
+                # Get the favicon URL using JavaScript
+                favicon_url = await page.evaluate("""
+                    () => {
+                        // Try to find favicon from various sources
+                        let favicon = null;
+                        
+                        // Look for link rel="icon"
+                        let link = document.querySelector('link[rel="icon"]') || 
+                                  document.querySelector('link[rel="shortcut icon"]') ||
+                                  document.querySelector('link[rel="apple-touch-icon"]') ||
+                                  document.querySelector('link[rel*="icon"]');
+                        
+                        if (link && link.href) {
+                            favicon = link.href;
+                        } else {
+                            // Fallback to default favicon.ico
+                            const url = new URL(window.location.href);
+                            favicon = url.origin + '/favicon.ico';
+                        }
+                        
+                        return favicon;
+                    }
+                """)
+                
+                print(f"Found favicon URL: {favicon_url}")
+                
+                if favicon_url:
+                    # Download the favicon using the same browser session
+                    response = await page.goto(favicon_url, timeout=10000)
+                    
+                    if response and response.status == 200:
+                        favicon_content = await response.body()
+                        
+                        # Convert to JPG using PIL
+                        img = Image.open(BytesIO(favicon_content))
+                        if img.mode != 'RGB':
+                            img = img.convert('RGB')
+                        
+                        # Save to temporary file
+                        with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp_file:
+                            tmp_path = tmp_file.name
+                            img.save(tmp_path, 'JPEG')
+                        
+                        # Upload to Supabase
+                        with open(tmp_path, 'rb') as f:
+                            file_content = f.read()
+                        
+                        storage_path = f"favicons/{filename}"
+                        
+                        # Remove existing file if present
+                        try:
+                            supabase.storage.from_('static').remove([storage_path])
+                        except:
+                            pass
+                        
+                        response = supabase.storage.from_('static').upload(
+                            storage_path,
+                            file_content,
+                            {
+                                "content-type": "image/jpeg",
+                                "upsert": "true"
+                            }
+                        )
+                        
+                        # Clean up
+                        os.unlink(tmp_path)
+                        
+                        # Handle the response properly
+                        if hasattr(response, 'error') and response.error:
+                            if "already exists" in str(response.error):
+                                public_url = supabase.storage.from_('static').get_public_url(storage_path)
+                                return {
+                                    "status": "success",
+                                    "message": "Favicon captured successfully from browser tab",
+                                    "path": storage_path,
+                                    "public_url": public_url,
+                                    "filename": filename
+                                }
+                            else:
+                                return {
+                                    "status": "error",
+                                    "message": f"Upload error: {response.error}",
+                                    "path": None
+                                }
+                        else:
+                            # Success case
+                            public_url = supabase.storage.from_('static').get_public_url(storage_path)
+                            return {
+                                "status": "success",
+                                "message": "Favicon captured successfully from browser tab",
+                                "path": storage_path,
+                                "public_url": public_url,
+                                "filename": filename
+                            }
+                    else:
+                        return {
+                            "status": "error",
+                            "message": f"Failed to download favicon: HTTP {response.status if response else 'No response'}",
+                            "path": None
+                        }
+                else:
+                    return {
+                        "status": "error",
+                        "message": "No favicon found on the website",
+                        "path": None
+                    }
+                    
+            except Exception as e:
+                print(f"Error loading page: {e}")
+                return {
+                    "status": "error",
+                    "message": f"Failed to load website: {str(e)}",
+                    "path": None
+                }
+            finally:
+                await browser.close()
+                
+    except Exception as e:
+        print(f"Error in favicon capture: {str(e)}")
+        return {
+            "status": "error",
+            "message": str(e),
+            "path": None
+        }
+
+async def get_website_favicon_async_old(url: str, session_id: str = None) -> dict:
+    """
     Async function to get website favicon
     """
     print(f"Getting favicon for URL: {url}, session_id: {session_id}")
