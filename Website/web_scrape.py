@@ -212,9 +212,14 @@ async def get_website_favicon_async(url: str, session_id: str = None) -> dict:
         else:
             filename = f"logo_{int(time.time())}.jpg"
         
-        # Use aiohttp for async HTTP requests
+        # Use aiohttp for async HTTP requests with complete headers
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1'
         }
         
         # NO TIMEOUT - let it take as long as needed
@@ -222,6 +227,20 @@ async def get_website_favicon_async(url: str, session_id: str = None) -> dict:
         async with aiohttp.ClientSession(timeout=timeout) as session:
             # Get the website HTML
             async with session.get(url, headers=headers) as response:
+                # Check for 503 Service Unavailable specifically
+                if response.status == 503:
+                    return {
+                        "status": "error",
+                        "message": f"Website temporarily unavailable (503 Service Unavailable). This often happens with websites that have bot protection like Cloudflare.",
+                        "path": None
+                    }
+                elif response.status != 200:
+                    return {
+                        "status": "error", 
+                        "message": f"Website returned HTTP {response.status}. Unable to access the site.",
+                        "path": None
+                    }
+                
                 html_text = await response.text()
                 
             soup = BeautifulSoup(html_text, 'html.parser')
@@ -325,6 +344,20 @@ async def get_website_favicon_async(url: str, session_id: str = None) -> dict:
                                     "public_url": public_url,
                                     "filename": filename
                                 }
+                        elif favicon_response.status == 503:
+                            print(f"Favicon blocked (503): {favicon_url}")
+                            return {
+                                "status": "error",
+                                "message": f"Favicon access blocked (503 Service Unavailable). The website has bot protection that is preventing favicon download.",
+                                "path": None
+                            }
+                        else:
+                            print(f"Favicon request failed with status {favicon_response.status}: {favicon_url}")
+                            return {
+                                "status": "error",
+                                "message": f"Favicon download failed with HTTP {favicon_response.status}",
+                                "path": None
+                            }
                 except Exception as e:
                     print(f"Error downloading favicon: {e}")
                     
