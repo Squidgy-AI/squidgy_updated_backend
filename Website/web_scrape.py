@@ -229,10 +229,10 @@ async def get_website_favicon_async(url: str, session_id: str = None) -> dict:
                 ]
             )
             
-            page = await browser.new_page()
-            
-            # Set a realistic user agent
-            await page.set_user_agent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+            # Create page with user agent
+            page = await browser.new_page(
+                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            )
             
             try:
                 # Navigate to the website with a reasonable timeout
