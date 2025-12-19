@@ -111,7 +111,7 @@ class BackgroundTextProcessor:
     async def download_file(self, file_url: str) -> bytes:
         """Download file from URL and return bytes"""
         try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
+            async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
                 response = await client.get(file_url)
                 response.raise_for_status()
                 return response.content
@@ -128,7 +128,7 @@ class BackgroundTextProcessor:
         
         if file_ext == '.pdf':
             return self.text_extractor.extract_from_pdf(file_bytes)
-        elif file_ext == '.txt':
+        elif file_ext in ['.txt', '.md', '.markdown']:
             return self.text_extractor.extract_from_txt(file_bytes)
         elif file_ext == '.docx':
             return self.text_extractor.extract_from_docx(file_bytes)
