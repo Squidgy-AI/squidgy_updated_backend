@@ -2822,17 +2822,9 @@ async def website_analysis_endpoint(request: WebsiteAnalysisRequest):
                 .insert(upsert_data)\
                 .execute()
         
-        return {
-            "status": "success",
-            "message": "Website analysis completed and saved",
-            "data": {
-                "id": result.data[0]['id'] if result.data else None,
-                "company_name": company_name,
-                "business_domain": business_domain,
-                "analysis_status": "completed",
-                "raw_analysis": response_text[:1000] + "..." if len(response_text) > 1000 else response_text
-            }
-        }
+        # Return the exact same response as the external scraping service (raw text)
+        from fastapi.responses import PlainTextResponse
+        return PlainTextResponse(content=response_text, media_type="text/plain")
         
     except Exception as e:
         logger.error(f"Error in website analysis endpoint: {str(e)}")
