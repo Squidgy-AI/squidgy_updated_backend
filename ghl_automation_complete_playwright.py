@@ -890,60 +890,127 @@ class HighLevelCompleteAutomationPlaywright:
                 
             await asyncio.sleep(1)
             
+            # Select the specific 15 scopes needed
+            scopes_to_add = [
+                # User-specified scopes (15)
+                "View Contacts", "Edit Contacts",
+                "View Conversation Reports", "Edit Conversations",
+                "View Calendars", "View Businesses",
+                "View Conversation Messages", "Edit Conversation Messages",
+                "View Custom Fields", "Edit Custom Fields",
+                "View Custom Values", "Edit Custom Values",
+                "View Medias", "Edit Tags", "View Tags"
+            ]
+            
+            print(f"[INTEGRATION] Will select {len(scopes_to_add)} specific scopes from the dropdown...")
+            for i, scope in enumerate(scopes_to_add, 1):
+                print(f"[PIT CREATION]   {i:2d}. {scope}")
+            
             # Wait for dropdown options to be visible after clicking
-            print("[INTEGRATION] Waiting for dropdown options to load...")
             await asyncio.sleep(2)
             
-            # Click "Select All" checkbox instead of typing individual scopes
             try:
-                print("[INTEGRATION] Looking for 'Select All' checkbox...")
-                print("[PIT CREATION] 🎯 Using 'Select All' to select all available scopes")
+                # Type and select each specific scope from our list
+                print("[INTEGRATION] Using type-and-select approach for scopes...")
                 
-                # Multiple selectors for the "Select All" checkbox
-                select_all_selectors = [
-                    "xpath=/html/body/div[7]/div/div/div[1]/div/div/div/div/div[1]",  # User-provided XPath
-                    ".hr-checkbox-icon",  # The checkbox icon class
-                    "div.hr-checkbox-icon",  # Div with checkbox icon class
-                    ".hr-base-select-option__check",  # The check element
-                    "//div[contains(@class, 'hr-checkbox-icon')]",  # XPath for checkbox icon
-                    "//div[contains(@class, 'hr-base-select-option')][1]//div[contains(@class, 'hr-checkbox')]",  # First option's checkbox
-                    ".hr-base-select-option:first-child .hr-checkbox",  # First option checkbox CSS
+                # Find the search input field in the dropdown
+                search_input_selectors = [
+                    ".hr-base-selection-input-tag__input",  # The input field from HTML
+                    "input[tabindex='-1']",  # Input with tabindex -1
+                    ".hr-base-selection-tags input",  # Input within tags container
+                    ".hr-base-selection input",  # Input within selection container
                 ]
                 
-                select_all_found = False
-                for selector in select_all_selectors:
+                search_input = None
+                for selector in search_input_selectors:
                     try:
-                        if selector.startswith('xpath=') or selector.startswith('//'):
-                            # XPath selector
-                            if not selector.startswith('xpath='):
-                                selector = f"xpath={selector}"
-                            print(f"[SCOPES] 🔍 Trying XPath selector: {selector}")
-                            await self.page.wait_for_selector(selector, timeout=3000)
-                            await self.page.click(selector)
-                            print(f"[SCOPES] ✅ Successfully clicked 'Select All' using XPath")
-                            select_all_found = True
-                            break
-                        else:
-                            # CSS selector
-                            print(f"[SCOPES] 🔍 Trying CSS selector: {selector}")
-                            await self.page.wait_for_selector(selector, timeout=3000)
-                            await self.page.click(selector)
-                            print(f"[SCOPES] ✅ Successfully clicked 'Select All' using CSS")
-                            select_all_found = True
-                            break
-                    except Exception as selector_error:
-                        print(f"[SCOPES] ❌ Selector failed: {selector} - {selector_error}")
+                        await self.page.wait_for_selector(selector, timeout=2000)
+                        search_input = self.page.locator(selector).first
+                        print(f"[SCOPES] 🔍 Found search input: {selector}")
+                        break
+                    except:
                         continue
                 
-                if select_all_found:
-                    print("[SCOPES] ✅ All scopes selected using 'Select All' checkbox!")
-                    await asyncio.sleep(1)  # Wait for selection to register
-                else:
-                    print("[SCOPES] ⚠️ Could not find 'Select All' checkbox with any selector")
-                    print("[SCOPES] Please manually select the scopes")
+                if not search_input:
+                    print("[SCOPES] ⚠️ Could not find search input, falling back to clicking approach")
+                    raise Exception("No search input found")
+                
+                scopes_found = 0
+                scopes_not_found = []
+                
+                # For each specific scope we need
+                for i, scope in enumerate(scopes_to_add):
+                    try:
+                        print(f"[SCOPES] [{i+1}/{len(scopes_to_add)}] Typing and selecting: {scope}")
+                        
+                        # Clear any existing text and type the scope name
+                        await search_input.click()
+                        await asyncio.sleep(0.2)
+                        
+                        # Clear the input field
+                        await search_input.fill("")
+                        await asyncio.sleep(0.1)
+                        
+                        # Type the scope name
+                        await search_input.type(scope)
+                        await asyncio.sleep(0.5)  # Wait for filtering to happen
+                        
+                        # Now look for the filtered result and click it
+                        scope_selectors = [
+                            f'.hr-base-select-option:has-text("{scope}")',  # HR select option with exact text
+                            f'div[role="option"]:has-text("{scope}")',  # Option role with exact text
+                            f'//*[contains(@class, "hr-base-select-option") and contains(text(), "{scope}")]',  # XPath with class and text
+                            f'//p[normalize-space(text())="{scope}"]',  # XPath for p tag with exact text
+                        ]
+                        
+                        scope_found = False
+                        for selector in scope_selectors:
+                            try:
+                                if selector.startswith('/'):
+                                    # XPath selector
+                                    xpath_selector = f"xpath={selector}"
+                                    await self.page.wait_for_selector(xpath_selector, timeout=2000)
+                                    scope_element = self.page.locator(xpath_selector).first
+                                    await scope_element.click()
+                                    print(f"[SCOPES] ✅ Selected '{scope}' using XPath")
+                                    scope_found = True
+                                    scopes_found += 1
+                                    break
+                                else:
+                                    # CSS selector
+                                    await self.page.wait_for_selector(selector, timeout=2000)
+                                    scope_element = self.page.locator(selector).first
+                                    await scope_element.click()
+                                    print(f"[SCOPES] ✅ Selected '{scope}' using CSS")
+                                    scope_found = True
+                                    scopes_found += 1
+                                    break
+                            except Exception:
+                                continue
+                        
+                        if not scope_found:
+                            # Try pressing Enter as alternative
+                            try:
+                                await self.page.keyboard.press('Enter')
+                                print(f"[SCOPES] ✅ Selected '{scope}' using Enter key")
+                                scope_found = True
+                                scopes_found += 1
+                            except:
+                                print(f"[SCOPES] ⚠️ Could not select scope: {scope}")
+                                scopes_not_found.append(scope)
+                        
+                        await asyncio.sleep(0.3)  # Brief pause between selections
+                            
+                    except Exception as e:
+                        print(f"[SCOPES] ❌ Error selecting scope '{scope}': {e}")
+                        scopes_not_found.append(scope)
+                
+                print(f"[SCOPES] ✅ Successfully selected {scopes_found}/{len(scopes_to_add)} scopes")
+                if scopes_not_found:
+                    print(f"[SCOPES] ⚠️ Scopes not found: {scopes_not_found}")
                 
             except Exception as e:
-                print(f"[ERROR] Failed to click 'Select All': {str(e)}")
+                print(f"[ERROR] Failed to select scopes: {str(e)}")
             
             # IMPORTANT: Click outside the dropdown to close it and finalize scope selection
             print("\n[INTEGRATION] Clicking outside dropdown to finalize scope selection...")
