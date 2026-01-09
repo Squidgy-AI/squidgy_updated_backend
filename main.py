@@ -30,6 +30,7 @@ from Website.web_scrape import capture_website_screenshot, get_website_favicon_a
 from invitation_handler import InvitationHandler
 from file_processing_service import FileProcessingService
 from background_text_processor import get_background_processor, initialize_background_processor
+from web_analysis_client import WebAnalysisClient
 
 # Handler classes
 
@@ -686,6 +687,14 @@ class WebsiteScreenshotRequest(BaseModel):
     url: str
     session_id: Optional[str] = None
     user_id: Optional[str] = None
+
+class WebsiteAnalysisRequest(BaseModel):
+    url: str
+    firm_user_id: str
+    agent_id: Optional[str] = None
+    firm_id: Optional[str] = None  # Will be auto-fetched from profiles table
+    ghl_location_id: Optional[str] = None  # Will be auto-fetched from ghl_subaccounts
+    ghl_user_id: Optional[str] = None  # Will be auto-fetched from ghl_subaccounts
 
 # Solar API Models removed - solar_api_connector dependency removed
 
@@ -2680,6 +2689,157 @@ async def website_favicon_endpoint(url: str, session_id: str = None):
     except Exception as e:
         logger.error(f"Error in website favicon endpoint: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/website/analysis")
+async def website_analysis_endpoint(request: WebsiteAnalysisRequest):
+    """
+    Analyze website and upsert into website_analysis table
+    Performs upsert based on firm_user_id and website_url
+    """
+    try:
+        # Initialize web analysis client
+        web_client = WebAnalysisClient()
+        
+        # Get website analysis from external endpoint
+        analysis_result = web_client.analyze_website(request.url)
+        
+        if not analysis_result['success']:
+            return {
+                "status": "error",
+                "message": f"Website analysis failed: {analysis_result.get('error', 'Unknown error')}"
+            }
+        
+        # Parse the analysis response text
+        analysis_data = analysis_result.get('data', {})
+        response_text = analysis_data.get('response_text', '')
+        
+        # Extract key information from the response
+        company_name = None
+        company_description = response_text  # Store the full analysis as company description
+        business_domain = None
+        
+        # Simple extraction from the first page title
+        if 'TITLE:' in response_text:
+            title_start = response_text.find('TITLE:') + 6
+            title_end = response_text.find('\n', title_start)
+            if title_end > title_start:
+                company_name = response_text[title_start:title_end].strip()
+        
+        # Extract domain from URL
+        from urllib.parse import urlparse
+        parsed_url = urlparse(request.url)
+        business_domain = parsed_url.netloc
+        
+        # Get user profile to retrieve firm_id (required)
+        if not request.firm_id:
+            try:
+                user_profile = supabase.table('profiles')\
+                    .select('company_id')\
+                    .eq('user_id', request.firm_user_id)\
+                    .execute()
+                
+                if user_profile.data and len(user_profile.data) > 0:
+                    request.firm_id = user_profile.data[0].get('company_id')
+                    logger.info(f"Fetched firm_id: {request.firm_id} for user: {request.firm_user_id}")
+                else:
+                    return {
+                        "status": "error",
+                        "message": f"User profile not found for firm_user_id: {request.firm_user_id}"
+                    }
+                    
+                if not request.firm_id:
+                    return {
+                        "status": "error",
+                        "message": f"No company_id found in user profile for firm_user_id: {request.firm_user_id}"
+                    }
+                    
+            except Exception as profile_error:
+                logger.error(f"Could not fetch user profile: {profile_error}")
+                return {
+                    "status": "error",
+                    "message": f"Failed to fetch user profile: {str(profile_error)}"
+                }
+        
+        # Get GHL subaccount data if not provided
+        ghl_location_id = request.ghl_location_id
+        ghl_user_id = request.ghl_user_id
+        
+        if not ghl_location_id or not ghl_user_id:
+            try:
+                ghl_subaccount = supabase.table('ghl_subaccounts')\
+                    .select('ghl_location_id, soma_ghl_user_id')\
+                    .eq('firm_user_id', request.firm_user_id)\
+                    .eq('agent_id', request.agent_id or 'web_analysis')\
+                    .execute()
+                
+                if ghl_subaccount.data and len(ghl_subaccount.data) > 0:
+                    subaccount = ghl_subaccount.data[0]
+                    ghl_location_id = ghl_location_id or subaccount.get('ghl_location_id')
+                    ghl_user_id = ghl_user_id or subaccount.get('soma_ghl_user_id')
+                    logger.info(f"Found GHL subaccount data: location_id={ghl_location_id}, user_id={ghl_user_id}")
+            except Exception as ghl_error:
+                logger.warning(f"Could not fetch GHL subaccount data: {ghl_error}")
+        
+        # Prepare upsert data
+        upsert_data = {
+            'firm_user_id': request.firm_user_id,
+            'agent_id': request.agent_id or 'web_analysis',
+            'firm_id': request.firm_id,
+            'website_url': request.url,
+            'company_name': company_name,
+            'company_description': company_description,
+            'business_domain': business_domain,
+            'analysis_status': 'completed',
+            'last_updated_timestamp': datetime.now(timezone.utc).isoformat(),
+            'ghl_location_id': ghl_location_id,
+            'ghl_user_id': ghl_user_id
+        }
+        
+        # Remove None values and clean the data
+        upsert_data = {k: v for k, v in upsert_data.items() if v is not None}
+        
+        # Debug: log the upsert data
+        logger.info(f"Upsert data: {upsert_data}")
+        
+        # Manual upsert: check if record exists, then update or insert
+        existing = supabase.table('website_analysis')\
+            .select('id')\
+            .eq('firm_user_id', request.firm_user_id)\
+            .eq('agent_id', request.agent_id or 'web_analysis')\
+            .eq('firm_id', request.firm_id)\
+            .execute()
+        
+        if existing.data and len(existing.data) > 0:
+            # Update existing record
+            record_id = existing.data[0]['id']
+            result = supabase.table('website_analysis')\
+                .update(upsert_data)\
+                .eq('id', record_id)\
+                .execute()
+        else:
+            # Insert new record
+            result = supabase.table('website_analysis')\
+                .insert(upsert_data)\
+                .execute()
+        
+        return {
+            "status": "success",
+            "message": "Website analysis completed and saved",
+            "data": {
+                "id": result.data[0]['id'] if result.data else None,
+                "company_name": company_name,
+                "business_domain": business_domain,
+                "analysis_status": "completed",
+                "raw_analysis": response_text[:1000] + "..." if len(response_text) > 1000 else response_text
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Error in website analysis endpoint: {str(e)}")
+        return {
+            "status": "error",
+            "message": f"Website analysis failed: {str(e)}"
+        }
 
 # GHL contact endpoints removed - tools_connector dependency removed
 
