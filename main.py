@@ -698,6 +698,46 @@ class WebsiteAnalysisRequest(BaseModel):
 
 # Solar API Models removed - solar_api_connector dependency removed
 
+# New request model for complete website analysis
+class WebsiteAnalysisCompleteRequest(BaseModel):
+    url: str
+    firm_user_id: str
+    agent_id: Optional[str] = "web_analysis"
+
+# URL normalization function to ensure consistent URL comparison
+def normalize_url(url: str) -> str:
+    """
+    Normalize URL for consistent comparison.
+    - Adds https:// if no protocol
+    - Removes trailing slashes
+    - Converts to lowercase
+    - Ensures www.google.com == https://www.google.com == http://www.google.com
+    """
+    from urllib.parse import urlparse, urlunparse
+
+    url = url.strip().lower()
+
+    # Add https:// if no protocol specified
+    if not url.startswith(('http://', 'https://')):
+        url = 'https://' + url
+
+    parsed = urlparse(url)
+
+    # Rebuild URL without trailing slash on path
+    path = parsed.path.rstrip('/') or ''
+
+    # Return normalized URL (always https, no trailing slash)
+    normalized = urlunparse((
+        'https',  # Always use https for storage
+        parsed.netloc,
+        path,
+        '',  # params
+        '',  # query (remove for base comparison)
+        ''   # fragment
+    ))
+
+    return normalized
+
 # Conversational Handler Class
 # API Endpoints
 @app.get("/")
@@ -2834,6 +2874,257 @@ async def website_analysis_endpoint(request: WebsiteAnalysisRequest):
         }
 
 # GHL contact endpoints removed - tools_connector dependency removed
+
+# =============================================================================
+# WEBSITE ANALYSIS COMPLETE ENDPOINT (with background screenshot/favicon)
+# =============================================================================
+
+async def capture_screenshot_and_favicon_background(
+    url: str,
+    firm_user_id: str,
+    agent_id: str,
+    firm_id: str
+):
+    """
+    Background task to capture screenshot and favicon, then update website_analysis table.
+    Runs after analysis response is returned to user.
+    """
+    try:
+        logger.info(f"Starting background capture for {url} (firm_user_id: {firm_user_id})")
+
+        # Run screenshot and favicon capture in parallel
+        screenshot_task = capture_website_screenshot(url, firm_user_id)
+        favicon_task = get_website_favicon_async(url, firm_user_id)
+
+        screenshot_result, favicon_result = await asyncio.gather(
+            screenshot_task,
+            favicon_task,
+            return_exceptions=True
+        )
+
+        # Prepare update data
+        update_data = {
+            'last_updated_timestamp': datetime.now(timezone.utc).isoformat()
+        }
+
+        # Add screenshot URL if successful
+        if isinstance(screenshot_result, dict) and screenshot_result.get('status') == 'success':
+            update_data['screenshot_url'] = screenshot_result.get('public_url')
+            logger.info(f"Screenshot captured: {update_data['screenshot_url']}")
+        else:
+            logger.warning(f"Screenshot capture failed: {screenshot_result}")
+
+        # Add favicon URL if successful
+        if isinstance(favicon_result, dict) and favicon_result.get('status') == 'success':
+            update_data['favicon_url'] = favicon_result.get('public_url')
+            logger.info(f"Favicon captured: {update_data['favicon_url']}")
+        else:
+            logger.warning(f"Favicon capture failed: {favicon_result}")
+
+        # Update the website_analysis record
+        if 'screenshot_url' in update_data or 'favicon_url' in update_data:
+            normalized_url = normalize_url(url)
+            supabase.table('website_analysis')\
+                .update(update_data)\
+                .eq('firm_user_id', firm_user_id)\
+                .eq('agent_id', agent_id)\
+                .eq('firm_id', firm_id)\
+                .execute()
+            logger.info(f"Background capture completed and database updated for {url}")
+
+    except Exception as e:
+        logger.error(f"Error in background screenshot/favicon capture: {str(e)}")
+
+
+@app.post("/api/website/analysis_complete")
+async def website_analysis_complete_endpoint(
+    request: WebsiteAnalysisCompleteRequest,
+    background_tasks: BackgroundTasks
+):
+    """
+    Complete website analysis endpoint:
+    1. Check if record exists for firm_user_id + website_url (normalized)
+    2. If exists with data -> return cached values
+    3. If not -> run analysis, return response, then capture screenshot/favicon in background
+    """
+    try:
+        # Normalize the URL for consistent comparison
+        normalized_url = normalize_url(request.url)
+        logger.info(f"Processing analysis_complete for URL: {normalized_url} (original: {request.url})")
+
+        # Get firm_id from profiles table
+        user_profile = supabase.table('profiles')\
+            .select('company_id')\
+            .eq('user_id', request.firm_user_id)\
+            .execute()
+
+        if not user_profile.data or len(user_profile.data) == 0:
+            return {
+                "status": "error",
+                "message": f"User profile not found for firm_user_id: {request.firm_user_id}"
+            }
+
+        firm_id = user_profile.data[0].get('company_id')
+        if not firm_id:
+            return {
+                "status": "error",
+                "message": f"No company_id found in user profile for firm_user_id: {request.firm_user_id}"
+            }
+
+        logger.info(f"Found firm_id: {firm_id} for user: {request.firm_user_id}")
+
+        # Check if record already exists with this firm_user_id + normalized URL
+        existing_record = supabase.table('website_analysis')\
+            .select('*')\
+            .eq('firm_user_id', request.firm_user_id)\
+            .eq('agent_id', request.agent_id)\
+            .eq('firm_id', firm_id)\
+            .execute()
+
+        # Check if we have a matching URL (normalized comparison)
+        cached_record = None
+        if existing_record.data:
+            for record in existing_record.data:
+                stored_url = record.get('website_url', '')
+                if normalize_url(stored_url) == normalized_url:
+                    cached_record = record
+                    break
+
+        # If cached record exists with analysis data, return it
+        if cached_record and cached_record.get('company_description'):
+            logger.info(f"Returning cached analysis for {normalized_url}")
+            return {
+                "status": "success",
+                "cached": True,
+                "data": {
+                    "company_name": cached_record.get('company_name'),
+                    "company_description": cached_record.get('company_description'),
+                    "value_proposition": cached_record.get('value_proposition'),
+                    "business_niche": cached_record.get('business_niche'),
+                    "business_domain": cached_record.get('business_domain'),
+                    "tags": cached_record.get('tags'),
+                    "screenshot_url": cached_record.get('screenshot_url'),
+                    "favicon_url": cached_record.get('favicon_url'),
+                    "website_url": cached_record.get('website_url')
+                },
+                "message": "Analysis retrieved from cache"
+            }
+
+        # No cached data - run fresh analysis
+        logger.info(f"Running fresh analysis for {normalized_url}")
+
+        # Initialize web analysis client
+        web_client = WebAnalysisClient()
+
+        # Get website analysis from external endpoint
+        analysis_result = web_client.analyze_website(request.url)
+
+        if not analysis_result['success']:
+            return {
+                "status": "error",
+                "message": f"Website analysis failed: {analysis_result.get('error', 'Unknown error')}"
+            }
+
+        # Parse the analysis response
+        analysis_data = analysis_result.get('data', {})
+        response_text = analysis_data.get('response_text', '')
+
+        # Extract company name from response
+        company_name = None
+        if 'TITLE:' in response_text:
+            title_start = response_text.find('TITLE:') + 6
+            title_end = response_text.find('\n', title_start)
+            if title_end > title_start:
+                company_name = response_text[title_start:title_end].strip()
+
+        # Extract domain from URL
+        from urllib.parse import urlparse
+        parsed_url = urlparse(request.url)
+        business_domain = parsed_url.netloc
+
+        # Get GHL subaccount data
+        ghl_location_id = None
+        ghl_user_id = None
+        try:
+            ghl_subaccount = supabase.table('ghl_subaccounts')\
+                .select('ghl_location_id, soma_ghl_user_id')\
+                .eq('firm_user_id', request.firm_user_id)\
+                .eq('agent_id', request.agent_id)\
+                .execute()
+
+            if ghl_subaccount.data and len(ghl_subaccount.data) > 0:
+                subaccount = ghl_subaccount.data[0]
+                ghl_location_id = subaccount.get('ghl_location_id')
+                ghl_user_id = subaccount.get('soma_ghl_user_id')
+        except Exception as ghl_error:
+            logger.warning(f"Could not fetch GHL subaccount data: {ghl_error}")
+
+        # Prepare upsert data
+        upsert_data = {
+            'firm_user_id': request.firm_user_id,
+            'agent_id': request.agent_id,
+            'firm_id': firm_id,
+            'website_url': normalized_url,
+            'company_name': company_name,
+            'company_description': response_text,
+            'business_domain': business_domain,
+            'analysis_status': 'completed',
+            'last_updated_timestamp': datetime.now(timezone.utc).isoformat(),
+            'ghl_location_id': ghl_location_id,
+            'ghl_user_id': ghl_user_id
+        }
+
+        # Remove None values
+        upsert_data = {k: v for k, v in upsert_data.items() if v is not None}
+
+        # Upsert to database
+        if cached_record:
+            # Update existing record
+            supabase.table('website_analysis')\
+                .update(upsert_data)\
+                .eq('id', cached_record['id'])\
+                .execute()
+        else:
+            # Insert new record
+            supabase.table('website_analysis')\
+                .insert(upsert_data)\
+                .execute()
+
+        logger.info(f"Analysis saved to database for {normalized_url}")
+
+        # Schedule background task for screenshot and favicon capture
+        background_tasks.add_task(
+            capture_screenshot_and_favicon_background,
+            request.url,  # Use original URL for capture
+            request.firm_user_id,
+            request.agent_id,
+            firm_id
+        )
+
+        logger.info(f"Background task scheduled for screenshot/favicon capture")
+
+        # Return analysis response immediately
+        return {
+            "status": "success",
+            "cached": False,
+            "data": {
+                "company_name": company_name,
+                "company_description": response_text,
+                "business_domain": business_domain,
+                "website_url": normalized_url,
+                "screenshot_url": None,  # Will be populated by background task
+                "favicon_url": None      # Will be populated by background task
+            },
+            "processing_assets": True,
+            "message": "Analysis completed. Screenshot and favicon are being captured in background."
+        }
+
+    except Exception as e:
+        logger.error(f"Error in website_analysis_complete endpoint: {str(e)}")
+        return {
+            "status": "error",
+            "message": f"Website analysis failed: {str(e)}"
+        }
 
 # =============================================================================
 # AGENT BUSINESS SETUP ENDPOINTS
