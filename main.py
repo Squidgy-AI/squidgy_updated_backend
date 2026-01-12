@@ -27,6 +27,7 @@ from PIL import Image
 
 # Local imports
 from Website.web_scrape import capture_website_screenshot, get_website_favicon_async
+from Website.web_analysis import analyze_website as analyze_website_local
 from invitation_handler import InvitationHandler
 from file_processing_service import FileProcessingService
 from background_text_processor import get_background_processor, initialize_background_processor
@@ -3013,11 +3014,8 @@ async def website_analysis_complete_endpoint(
         # No cached data - run fresh analysis
         logger.info(f"Running fresh analysis for {normalized_url}")
 
-        # Initialize web analysis client
-        web_client = WebAnalysisClient()
-
-        # Get website analysis from external endpoint
-        analysis_result = web_client.analyze_website(request.url)
+        # Use local web scraping instead of external endpoint
+        analysis_result = analyze_website_local(request.url, max_depth=1, max_pages=10)
 
         if not analysis_result['success']:
             return {
