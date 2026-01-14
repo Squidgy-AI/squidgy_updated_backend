@@ -32,6 +32,7 @@ from invitation_handler import InvitationHandler
 from file_processing_service import FileProcessingService
 from background_text_processor import get_background_processor, initialize_background_processor
 from web_analysis_client import WebAnalysisClient
+from ghl_oauth_automation import get_oauth_automation
 
 # Handler classes
 
@@ -4531,7 +4532,18 @@ async def run_ghl_creation_background(
             'updated_at': datetime.now().isoformat()
         }).eq('id', ghl_record_id).execute()
         
-        # Step 3: Create Facebook integration record
+        # Step 3: Start PIT Token automation background task
+        print(f"[GHL BACKGROUND] 🔑 Starting PIT Token automation...")
+        asyncio.create_task(run_pit_token_automation(
+            ghl_record_id=ghl_record_id,
+            location_id=location_id,
+            email=soma_unique_email,
+            password="Dummy@123",
+            firm_user_id=user_id,
+            ghl_user_id=soma_user_id
+        ))
+        
+        # Step 4: Create Facebook integration record
         facebook_record_id = str(uuid.uuid4())
         
         print(f"[GHL BACKGROUND] 📱 Creating Facebook integration record...")
@@ -4547,7 +4559,7 @@ async def run_ghl_creation_background(
             'automation_status': 'ready'
         }).execute()
         
-        # Step 4: Start Facebook automation background task
+        # Step 5: Start Facebook automation background task
         print(f"[GHL BACKGROUND] 🚀 Starting Facebook automation...")
         asyncio.create_task(run_facebook_automation_registration(
             facebook_record_id=facebook_record_id,
@@ -4562,6 +4574,7 @@ async def run_ghl_creation_background(
         print(f"[GHL BACKGROUND] ✅ GHL creation completed successfully!")
         print(f"[GHL BACKGROUND] 🎯 Location ID: {location_id}")
         print(f"[GHL BACKGROUND] 👤 Soma User ID: {soma_user_id}")
+        print(f"[GHL BACKGROUND] 🔑 PIT Token automation started")
         print(f"[GHL BACKGROUND] 📱 Facebook automation started")
         
     except Exception as e:
@@ -4574,6 +4587,117 @@ async def run_ghl_creation_background(
             'creation_error': error_msg,
             'updated_at': datetime.now().isoformat()
         }).eq('id', ghl_record_id).execute()
+
+async def run_pit_token_automation(
+    ghl_record_id: str,
+    location_id: str,
+    email: str,
+    password: str,
+    firm_user_id: str,
+    ghl_user_id: str = None
+):
+    """Run PIT Token automation and update ghl_subaccounts table"""
+    try:
+        print(f"[PIT AUTOMATION] 🔑 Starting PIT Token automation")
+        print(f"[PIT AUTOMATION] GHL Record ID: {ghl_record_id}")
+        print(f"[PIT AUTOMATION] Location ID: {location_id}")
+        print(f"[PIT AUTOMATION] Email: {email}")
+        
+        # Update status to running
+        supabase.table('ghl_subaccounts').update({
+            'automation_status': 'pit_running',
+            'updated_at': datetime.now().isoformat()
+        }).eq('id', ghl_record_id).execute()
+        
+        print(f"[PIT AUTOMATION] ✅ Updated automation status to 'pit_running'")
+        
+        # Import and run the Playwright automation
+        try:
+            print(f"[PIT AUTOMATION] 📦 Loading Playwright automation module...")
+            from ghl_automation_complete_playwright import HighLevelCompleteAutomationPlaywright
+            
+            print(f"[PIT AUTOMATION] 🚀 Initializing automation (headless mode)...")
+            automation = HighLevelCompleteAutomationPlaywright(headless=True)
+            
+            print(f"[PIT AUTOMATION] ▶️ Starting automation workflow...")
+            success = await automation.run_automation(
+                email=email,
+                password=password,
+                location_id=location_id,
+                firm_user_id=firm_user_id,
+                agent_id='SOL',
+                ghl_user_id=ghl_user_id,
+                save_to_database=False  # We handle database operations here
+            )
+            
+            if success:
+                # Extract PIT token
+                pit_token = automation.pit_token if hasattr(automation, 'pit_token') else None
+                
+                if pit_token:
+                    # Update ghl_subaccounts with PIT_Token
+                    supabase.table('ghl_subaccounts').update({
+                        'PIT_Token': pit_token,
+                        'automation_status': 'pit_completed',
+                        'updated_at': datetime.now().isoformat()
+                    }).eq('id', ghl_record_id).execute()
+                    
+                    print(f"[PIT AUTOMATION] ✅ PIT TOKEN GENERATED SUCCESSFULLY!")
+                    print(f"[PIT AUTOMATION] 🎉 PIT Token: {pit_token[:30]}...")
+                    print(f"[PIT AUTOMATION] 💾 Updated ghl_subaccounts table")
+                else:
+                    error_msg = "PIT token was not generated by automation"
+                    supabase.table('ghl_subaccounts').update({
+                        'automation_status': 'pit_failed',
+                        'automation_error': error_msg,
+                        'updated_at': datetime.now().isoformat()
+                    }).eq('id', ghl_record_id).execute()
+                    
+                    print(f"[PIT AUTOMATION] ❌ PIT TOKEN NOT FOUND!")
+                    print(f"[PIT AUTOMATION] {error_msg}")
+            else:
+                error_msg = "PIT automation workflow failed - check detailed logs"
+                supabase.table('ghl_subaccounts').update({
+                    'automation_status': 'pit_failed',
+                    'automation_error': error_msg,
+                    'updated_at': datetime.now().isoformat()
+                }).eq('id', ghl_record_id).execute()
+                
+                print(f"[PIT AUTOMATION] ❌ PIT AUTOMATION FAILED!")
+                print(f"[PIT AUTOMATION] {error_msg}")
+                
+        except ImportError as import_error:
+            error_msg = f"Could not import automation module: {import_error}"
+            print(f"[PIT AUTOMATION] ❌ IMPORT ERROR: {error_msg}")
+            
+            supabase.table('ghl_subaccounts').update({
+                'automation_status': 'pit_failed',
+                'automation_error': error_msg,
+                'updated_at': datetime.now().isoformat()
+            }).eq('id', ghl_record_id).execute()
+            
+        except Exception as automation_error:
+            error_msg = f"PIT automation execution failed: {automation_error}"
+            print(f"[PIT AUTOMATION] ❌ EXECUTION ERROR: {error_msg}")
+            
+            supabase.table('ghl_subaccounts').update({
+                'automation_status': 'pit_failed',
+                'automation_error': error_msg,
+                'updated_at': datetime.now().isoformat()
+            }).eq('id', ghl_record_id).execute()
+            
+    except Exception as e:
+        error_msg = f"PIT automation task failed: {str(e)}"
+        print(f"[PIT AUTOMATION] ❌ TASK ERROR: {error_msg}")
+        
+        try:
+            supabase.table('ghl_subaccounts').update({
+                'automation_status': 'pit_failed',
+                'automation_error': error_msg,
+                'updated_at': datetime.now().isoformat()
+            }).eq('id', ghl_record_id).execute()
+        except:
+            pass
 
 async def run_facebook_automation_registration(
     facebook_record_id: str,
@@ -4900,6 +5024,83 @@ async def create_subaccount_and_user_registration(request: GHLRegistrationReques
         logger.error(f"Error in registration GHL creation: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/api/ghl/trigger-pit-automation/{ghl_record_id}")
+async def trigger_pit_automation(ghl_record_id: str):
+    """Manually trigger PIT token automation for an existing GHL subaccount"""
+    try:
+        print(f"[MANUAL PIT] 🔑 Manual PIT automation trigger for: {ghl_record_id}")
+        
+        # Get GHL subaccount details
+        ghl_result = supabase.table('ghl_subaccounts')\
+            .select('*')\
+            .eq('id', ghl_record_id)\
+            .single()\
+            .execute()
+        
+        if not ghl_result.data:
+            raise HTTPException(status_code=404, detail=f"GHL record not found: {ghl_record_id}")
+        
+        ghl_data = ghl_result.data
+        
+        # Validate required fields
+        if not ghl_data.get('ghl_location_id'):
+            raise HTTPException(status_code=400, detail="Location ID not found in record")
+        if not ghl_data.get('soma_ghl_email'):
+            raise HTTPException(status_code=400, detail="Soma email not found in record")
+        if not ghl_data.get('soma_ghl_password'):
+            raise HTTPException(status_code=400, detail="Soma password not found in record")
+        
+        # Start PIT automation
+        asyncio.create_task(run_pit_token_automation(
+            ghl_record_id=ghl_record_id,
+            location_id=ghl_data['ghl_location_id'],
+            email=ghl_data['soma_ghl_email'],
+            password=ghl_data['soma_ghl_password'],
+            firm_user_id=ghl_data['firm_user_id'],
+            ghl_user_id=ghl_data.get('soma_ghl_user_id')
+        ))
+        
+        print(f"[MANUAL PIT] ✅ PIT automation task started")
+        
+        return {
+            "status": "started",
+            "message": "PIT token automation started successfully",
+            "ghl_record_id": ghl_record_id,
+            "location_id": ghl_data['ghl_location_id'],
+            "check_status_endpoint": f"/api/ghl/status/{ghl_record_id}",
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error triggering PIT automation: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/ghl/user/{user_id}/integrations")
+async def get_user_ghl_integrations(user_id: str):
+    """Get all GHL integrations for a user by firm_user_id"""
+    try:
+        print(f"[GHL INTEGRATIONS] 📊 Fetching integrations for user: {user_id}")
+        
+        # Get all GHL subaccounts for this user using firm_user_id
+        ghl_result = supabase.table('ghl_subaccounts')\
+            .select('*')\
+            .eq('firm_user_id', user_id)\
+            .execute()
+        
+        if not ghl_result.data:
+            return {"integrations": [], "message": "No GHL integrations found for this user"}
+        
+        return {
+            "integrations": ghl_result.data,
+            "count": len(ghl_result.data)
+        }
+        
+    except Exception as e:
+        logger.error(f"Error fetching GHL integrations: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/api/ghl/status/{ghl_record_id}")
 async def get_ghl_status(ghl_record_id: str):
     """Get status of GHL subaccount creation and Facebook automation"""
@@ -4939,7 +5140,9 @@ async def get_ghl_status(ghl_record_id: str):
                 "subaccount_created_at": ghl_data.get('subaccount_created_at'),
                 "soma_user_created_at": ghl_data.get('soma_user_created_at'),
                 "creation_error": ghl_data.get('creation_error'),
-                "automation_error": ghl_data.get('automation_error')
+                "automation_error": ghl_data.get('automation_error'),
+                "pit_token_available": bool(ghl_data.get('PIT_Token')),
+                "pit_token_preview": ghl_data.get('PIT_Token')[:30] + "..." if ghl_data.get('PIT_Token') else None
             },
             "facebook_status": None,
             "overall_status": ghl_data['creation_status'],
@@ -6809,6 +7012,59 @@ async def scrape_website_endpoint(request: WebScrapeRequest):
 
 # ============================================================================
 # END WEB SCRAPING ENDPOINTS
+# ============================================================================
+
+# ============================================================================
+# GHL OAUTH AUTOMATION ENDPOINTS
+# ============================================================================
+
+@app.post("/api/ghl/oauth/facebook/get-url")
+async def get_facebook_oauth_url(request: Request):
+    """
+    Automate admin login to GHL and capture Facebook OAuth URL for a location
+    
+    Request body:
+    {
+        "location_id": "string",
+        "user_id": "string"
+    }
+    """
+    try:
+        body = await request.json()
+        location_id = body.get('location_id')
+        user_id = body.get('user_id')
+        
+        if not location_id:
+            raise HTTPException(status_code=400, detail="location_id is required")
+        
+        print(f"[OAUTH AUTOMATION] 🚀 Getting Facebook OAuth URL for location: {location_id}")
+        
+        # Get the automation instance
+        automation = get_oauth_automation()
+        
+        # Run the automation to get OAuth URL
+        result = await automation.get_facebook_oauth_url(location_id)
+        
+        if result['success']:
+            # If we have user_id, append it to the OAuth URL
+            if user_id and result['oauth_url']:
+                separator = '&' if '?' in result['oauth_url'] else '?'
+                result['oauth_url'] = f"{result['oauth_url']}{separator}userId={user_id}"
+            
+            print(f"[OAUTH AUTOMATION] ✅ Successfully retrieved OAuth URL")
+            return result
+        else:
+            print(f"[OAUTH AUTOMATION] ❌ Failed to get OAuth URL: {result['message']}")
+            raise HTTPException(status_code=500, detail=result['message'])
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in OAuth automation: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ============================================================================
+# END GHL OAUTH AUTOMATION ENDPOINTS
 # ============================================================================
 
 # ============================================================================

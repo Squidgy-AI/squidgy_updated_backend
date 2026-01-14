@@ -391,8 +391,8 @@ class HighLevelCompleteAutomationPlaywright:
                             continue
                     
                     if button_clicked:
-                        print("[⏳ WAITING] Waiting 5 seconds for email to be sent...")
-                        await asyncio.sleep(5)  # Give more time for email to arrive
+                        print("[⏳ WAITING] Waiting 2 seconds for email to be sent...")
+                        await asyncio.sleep(2)  # Give more time for email to arrive
                     else:
                         print("[WARNING] Could not click 'Send Security Code' button with any selector")
                         print("[INFO] Continuing anyway - code may already be sent")
@@ -419,8 +419,8 @@ class HighLevelCompleteAutomationPlaywright:
                 if not otp_code:
                     print("[❌ AUTO] Failed to get OTP automatically")
                     print("[💡 MANUAL] Please check your email and manually enter the code in the browser")
-                    print("[⏳ WAITING] Waiting 30 seconds for manual OTP entry...")
-                    await asyncio.sleep(30)
+                    print("[⏳ WAITING] Waiting 15 seconds for manual OTP entry...")
+                    await asyncio.sleep(15)
                     return True
                 
                 print(f"[✅ VERIFICATION] Using OTP code: {otp_code}")
@@ -475,11 +475,11 @@ class HighLevelCompleteAutomationPlaywright:
                     
                     if input_success:
                         print("[✅ VERIFICATION] OTP entered successfully")
-                        await asyncio.sleep(5)  # Wait for verification to complete
+                        await asyncio.sleep(3)  # Wait for verification to complete
                     else:
                         print("[❌ VERIFICATION] Failed to input OTP digits automatically")
                         print("[💡 MANUAL] Please enter the OTP manually in the browser")
-                        await asyncio.sleep(30)
+                        await asyncio.sleep(15)
                         
                 except Exception as e:
                     print(f"[ERROR] Verification code input error: {e}")
@@ -487,20 +487,35 @@ class HighLevelCompleteAutomationPlaywright:
             
             print("[SUCCESS] Verification completed!")
             
-            # Wait for page to fully load after verification
-            print("[⏳ WAITING] Waiting for page to stabilize after verification...")
-            await asyncio.sleep(5)
+            # Wait for page to fully load and stabilize after verification
+            print("[⏳ WAITING] Waiting for page to fully stabilize after verification...")
+            await asyncio.sleep(5)  # Longer wait to let dashboard fully load
             
-            # Check if we're redirected to the right page
+            # Check current URL after verification
             current_url = self.page.url
             print(f"[📍 POST-VERIFICATION] Current URL: {current_url}")
             
-            # If we're not on private integrations page, navigate there
+            # After login, we're redirected to dashboard, so navigate to private integrations
             if "private-integrations" not in current_url:
-                print("[📍 REDIRECT] Not on private integrations page, navigating...")
-                private_int_url = f"https://app.gohighlevel.com/v2/location/{self.location_id}/settings/private-integrations/"
-                await self.page.goto(private_int_url)
-                await asyncio.sleep(3)
+                print("[📍 REDIRECT] Not on private integrations page, navigating there now...")
+                if not self.location_id:
+                    print("[ERROR] location_id not set! Cannot navigate to private integrations.")
+                    return False
+                # Navigate to private integrations page
+                private_int_url = f"https://app.gohighlevel.com/v2/location/{self.location_id}/settings/private-integrations"
+                print(f"[📍 REDIRECT] Navigating to: {private_int_url}")
+                await self.page.goto(private_int_url, wait_until='networkidle')  # Wait for network to be idle
+                await asyncio.sleep(3)  # Give extra time for page to load
+                
+                # Verify we reached the page
+                final_url = self.page.url
+                print(f"[📍 FINAL URL] After navigation: {final_url}")
+                if "private-integrations" in final_url:
+                    print("[✅ SUCCESS] Successfully navigated to private integrations page!")
+                else:
+                    print(f"[⚠️ WARNING] May not be on correct page. Current: {final_url}")
+            else:
+                print("[✅ SUCCESS] Already on private integrations page!")
             
             # Extract tokens after successful login
             await self.extract_tokens_from_storage()
@@ -534,8 +549,8 @@ class HighLevelCompleteAutomationPlaywright:
         
         # Wait for page to fully load and handle any redirects
         print("[⏳ WAITING] Waiting for page to stabilize...")
-        print("[PIT CREATION] 🕐 Waiting 8 seconds for page elements to load...")
-        await asyncio.sleep(8)  # Increased wait time
+        print("[PIT CREATION] 🕐 Waiting 3 seconds for page elements to load...")
+        await asyncio.sleep(3)  # Increased wait time
         
         # Check if URL has changed after waiting
         new_url = self.page.url
@@ -584,7 +599,7 @@ class HighLevelCompleteAutomationPlaywright:
             await self.page.wait_for_load_state('domcontentloaded', timeout=10000)
         except:
             print("[⚠️ TIMEOUT] DOM load timeout, continuing anyway...")
-        await asyncio.sleep(5)  # Simple wait for dynamic content
+        await asyncio.sleep(2)  # Simple wait for dynamic content
         
         # Check if we're on the right page by looking for key elements
         try:
@@ -709,8 +724,8 @@ class HighLevelCompleteAutomationPlaywright:
         # Check if button was successfully clicked across all retries
         if not button_clicked:
             print("[💡 FALLBACK] Could not click integration button after all attempts. Please click it manually in the browser.")
-            print("[⏳ WAITING] Waiting 20 seconds for manual intervention...")
-            await asyncio.sleep(20)
+            print("[⏳ WAITING] Waiting 10 seconds for manual intervention...")
+            await asyncio.sleep(10)
             # Continue anyway as user might have clicked manually
         else:
             print("[🎯 PROCEEDING] Button clicked successfully, continuing with form filling...")
@@ -818,8 +833,8 @@ class HighLevelCompleteAutomationPlaywright:
                 
             print("[INTEGRATION] Form submitted")
             print("[PIT CREATION] ✅ Successfully submitted integration form")
-            print("[PIT CREATION] 🕐 Waiting 5 seconds for next step to load...")
-            await asyncio.sleep(5)
+            print("[PIT CREATION] 🕐 Waiting 3 seconds for next step to load...")
+            await asyncio.sleep(3)
         except Exception as e:
             print(f"[ERROR] Could not submit integration form: {e}")
             print(f"[PIT CREATION] ❌ CRITICAL: Failed to submit integration form - {e}")
@@ -888,129 +903,45 @@ class HighLevelCompleteAutomationPlaywright:
             if not dropdown_found:
                 raise Exception("Could not find Select scopes dropdown with any selector")
                 
-            await asyncio.sleep(1)
-            
-            # Select the specific 15 scopes needed
-            scopes_to_add = [
-                # User-specified scopes (15)
-                "View Contacts", "Edit Contacts",
-                "View Conversation Reports", "Edit Conversations",
-                "View Calendars", "View Businesses",
-                "View Conversation Messages", "Edit Conversation Messages",
-                "View Custom Fields", "Edit Custom Fields",
-                "View Custom Values", "Edit Custom Values",
-                "View Medias", "Edit Tags", "View Tags"
-            ]
-            
-            print(f"[INTEGRATION] Will select {len(scopes_to_add)} specific scopes from the dropdown...")
-            for i, scope in enumerate(scopes_to_add, 1):
-                print(f"[PIT CREATION]   {i:2d}. {scope}")
-            
-            # Wait for dropdown options to be visible after clicking
             await asyncio.sleep(2)
             
+            # Click "Select all scopes" checkbox instead of selecting individually
+            print("[INTEGRATION] Clicking 'Select all scopes' checkbox...")
+            
             try:
-                # Type and select each specific scope from our list
-                print("[INTEGRATION] Using type-and-select approach for scopes...")
-                
-                # Find the search input field in the dropdown
-                search_input_selectors = [
-                    ".hr-base-selection-input-tag__input",  # The input field from HTML
-                    "input[tabindex='-1']",  # Input with tabindex -1
-                    ".hr-base-selection-tags input",  # Input within tags container
-                    ".hr-base-selection input",  # Input within selection container
+                # Try multiple selectors for the "Select all scopes" checkbox
+                select_all_selectors = [
+                    "xpath=/html/body/div[5]/div/div/div[1]/div/div/span",  # User-provided XPath for label
+                    "xpath=//*[@id='d8dd458f']",  # User-provided ID XPath
+                    ".hr-checkbox__label",  # CSS class for label
+                    'span:has-text("Select all")',  # Span with Select all text
+                    "xpath=/html/body/div[5]/div/div/div[1]/div/div/div/div/div[2]",  # Previous XPath
+                    ".hr-checkbox-box__border",  # CSS class from user
+                    '.hr-checkbox',  # Generic checkbox class
                 ]
                 
-                search_input = None
-                for selector in search_input_selectors:
+                select_all_clicked = False
+                for selector in select_all_selectors:
                     try:
-                        await self.page.wait_for_selector(selector, timeout=2000)
-                        search_input = self.page.locator(selector).first
-                        print(f"[SCOPES] 🔍 Found search input: {selector}")
+                        print(f"[SCOPES] Trying selector: {selector}")
+                        await self.page.wait_for_selector(selector, timeout=3000)
+                        await self.page.click(selector)
+                        print("[SCOPES] ✅ Successfully clicked 'Select all scopes' checkbox!")
+                        select_all_clicked = True
                         break
-                    except:
+                    except Exception as e:
+                        print(f"[SCOPES] Selector failed: {selector} - {e}")
                         continue
                 
-                if not search_input:
-                    print("[SCOPES] ⚠️ Could not find search input, falling back to clicking approach")
-                    raise Exception("No search input found")
+                if not select_all_clicked:
+                    print("[SCOPES] ⚠️ Could not find 'Select all scopes' checkbox")
+                    raise Exception("Could not find Select all scopes checkbox")
                 
-                scopes_found = 0
-                scopes_not_found = []
-                
-                # For each specific scope we need
-                for i, scope in enumerate(scopes_to_add):
-                    try:
-                        print(f"[SCOPES] [{i+1}/{len(scopes_to_add)}] Typing and selecting: {scope}")
-                        
-                        # Clear any existing text and type the scope name
-                        await search_input.click()
-                        await asyncio.sleep(0.2)
-                        
-                        # Clear the input field
-                        await search_input.fill("")
-                        await asyncio.sleep(0.1)
-                        
-                        # Type the scope name
-                        await search_input.type(scope)
-                        await asyncio.sleep(0.5)  # Wait for filtering to happen
-                        
-                        # Now look for the filtered result and click it
-                        scope_selectors = [
-                            f'.hr-base-select-option:has-text("{scope}")',  # HR select option with exact text
-                            f'div[role="option"]:has-text("{scope}")',  # Option role with exact text
-                            f'//*[contains(@class, "hr-base-select-option") and contains(text(), "{scope}")]',  # XPath with class and text
-                            f'//p[normalize-space(text())="{scope}"]',  # XPath for p tag with exact text
-                        ]
-                        
-                        scope_found = False
-                        for selector in scope_selectors:
-                            try:
-                                if selector.startswith('/'):
-                                    # XPath selector
-                                    xpath_selector = f"xpath={selector}"
-                                    await self.page.wait_for_selector(xpath_selector, timeout=2000)
-                                    scope_element = self.page.locator(xpath_selector).first
-                                    await scope_element.click()
-                                    print(f"[SCOPES] ✅ Selected '{scope}' using XPath")
-                                    scope_found = True
-                                    scopes_found += 1
-                                    break
-                                else:
-                                    # CSS selector
-                                    await self.page.wait_for_selector(selector, timeout=2000)
-                                    scope_element = self.page.locator(selector).first
-                                    await scope_element.click()
-                                    print(f"[SCOPES] ✅ Selected '{scope}' using CSS")
-                                    scope_found = True
-                                    scopes_found += 1
-                                    break
-                            except Exception:
-                                continue
-                        
-                        if not scope_found:
-                            # Try pressing Enter as alternative
-                            try:
-                                await self.page.keyboard.press('Enter')
-                                print(f"[SCOPES] ✅ Selected '{scope}' using Enter key")
-                                scope_found = True
-                                scopes_found += 1
-                            except:
-                                print(f"[SCOPES] ⚠️ Could not select scope: {scope}")
-                                scopes_not_found.append(scope)
-                        
-                        await asyncio.sleep(0.3)  # Brief pause between selections
-                            
-                    except Exception as e:
-                        print(f"[SCOPES] ❌ Error selecting scope '{scope}': {e}")
-                        scopes_not_found.append(scope)
-                
-                print(f"[SCOPES] ✅ Successfully selected {scopes_found}/{len(scopes_to_add)} scopes")
-                if scopes_not_found:
-                    print(f"[SCOPES] ⚠️ Scopes not found: {scopes_not_found}")
+                await asyncio.sleep(1)
+                print("[SCOPES] ✅ All scopes selected via 'Select all' option")
                 
             except Exception as e:
-                print(f"[ERROR] Failed to select scopes: {str(e)}")
+                print(f"[ERROR] Failed to select all scopes: {str(e)}")
             
             # IMPORTANT: Click outside the dropdown to close it and finalize scope selection
             print("\n[INTEGRATION] Clicking outside dropdown to finalize scope selection...")
@@ -1068,13 +999,49 @@ class HighLevelCompleteAutomationPlaywright:
                 print("[PIT CREATION] ⚠️ Could not find Create button with any selector")
                 print("[PIT CREATION] Please click the Create button manually")
             
+            # After clicking Create, a confirmation popup appears - click Confirm
+            print("\n[INTEGRATION] Waiting for confirmation popup...")
+            await asyncio.sleep(2)
+            
+            try:
+                print("[INTEGRATION] Looking for Confirm button in popup...")
+                confirm_selectors = [
+                    "xpath=/html/body/div[7]/div/div/div[1]/div/div[3]/div[2]/div/button[2]/span",  # User-provided XPath
+                    'button:has-text("Confirm")',  # Text-based selector
+                    'span:has-text("Confirm")',  # Span with Confirm text
+                    '.hr-button__content:has-text("Confirm")',  # CSS class with text
+                    '//span[contains(text(), "Confirm")]/parent::button',  # XPath to button via span
+                    'button.hr-button--primary:has-text("Confirm")',  # Primary button with Confirm
+                ]
+                
+                confirm_clicked = False
+                for selector in confirm_selectors:
+                    try:
+                        print(f"[CONFIRM] Trying selector: {selector}")
+                        await self.page.wait_for_selector(selector, timeout=3000)
+                        await self.page.click(selector)
+                        print("[CONFIRM] ✅ Successfully clicked Confirm button!")
+                        confirm_clicked = True
+                        break
+                    except Exception as e:
+                        print(f"[CONFIRM] Selector failed: {selector} - {e}")
+                        continue
+                
+                if not confirm_clicked:
+                    print("[CONFIRM] ⚠️ Could not find Confirm button, continuing anyway...")
+                
+                await asyncio.sleep(2)
+                
+            except Exception as e:
+                print(f"[WARNING] Error clicking Confirm button: {e}")
+            
             # Wait for token display and copy it
             print("[INTEGRATION] Waiting for token generation...")
             await asyncio.sleep(3)
             
             try:
-                # Use the exact XPath for the copy button
-                copy_button_xpath = "/html/body/div[7]/div/div/div[1]/div/div[3]/div[1]/div/div[2]/button/span"
+                # Use the exact XPath for the copy button (updated to div[8])
+                copy_button_xpath = "/html/body/div[8]/div/div/div[1]/div/div[3]/div[1]/div/div[2]/button/span"
                 xpath_selector = f"xpath={copy_button_xpath}"
                 
                 await self.page.wait_for_selector(xpath_selector, timeout=10000)
@@ -1134,8 +1101,8 @@ class HighLevelCompleteAutomationPlaywright:
                 
                 # After clicking copy button, extract token using exact XPath
                 try:
-                    # Use the exact XPath where token is displayed
-                    exact_token_xpath = "/html/body/div[7]/div/div/div[1]/div/div[3]/div[1]/div/div[2]/p"
+                    # Use the exact XPath where token is displayed (updated to div[8])
+                    exact_token_xpath = "/html/body/div[8]/div/div/div[1]/div/div[3]/div[1]/div/div[2]/p"
                     xpath_selector = f"xpath={exact_token_xpath}"
                     print("Looking for token at exact XPath...")
                     
@@ -1175,9 +1142,13 @@ class HighLevelCompleteAutomationPlaywright:
         
         return True
     
-    async def handle_login_and_verification(self, email: str, password: str):
+    async def handle_login_and_verification(self, email: str, password: str, location_id: str = None):
         """Handle login and automatic email verification - Playwright version"""
         try:
+            # Store location_id if provided
+            if location_id:
+                self.location_id = location_id
+            
             current_url = self.page.url.lower()
             page_source = (await self.page.content()).lower()
             
@@ -1273,7 +1244,7 @@ class HighLevelCompleteAutomationPlaywright:
                     
                     # Wait for login to process
                     print("[LOGIN] Waiting for login to complete...")
-                    await asyncio.sleep(8)
+                    await asyncio.sleep(4)
                     
                 except Exception as e:
                     print(f"[ERROR] Login button error: {e}")
@@ -1289,19 +1260,22 @@ class HighLevelCompleteAutomationPlaywright:
     async def navigate_to_target(self, location_id: str, email: str, password: str):
         """Navigate to target URL with login and verification handling - Playwright version"""
         try:
-            target_url = f"https://app.onetoo.com/v2/location/{location_id}/settings/private-integrations/"
+            # Store location_id as instance variable
+            self.location_id = location_id
+            
+            target_url = f"https://app.gohighlevel.com/v2/location/{location_id}/settings/private-integrations/"
             print(f"[NAVIGATE] Going directly to: {target_url}")
             
             # Go directly to the target URL
             await self.page.goto(target_url)
             await asyncio.sleep(3)
             
-            # Handle login and verification
-            if not await self.handle_login_and_verification(email, password):
+            # Handle login and verification (pass location_id)
+            if not await self.handle_login_and_verification(email, password, location_id):
                 return False
             
             # Wait and check final URL
-            await asyncio.sleep(5)
+            await asyncio.sleep(2)
             final_url = self.page.url
             print(f"[INFO] Final URL: {final_url}")
             
@@ -1519,27 +1493,10 @@ class HighLevelCompleteAutomationPlaywright:
                            save_to_database: bool = True):
         """Run the complete automation workflow with automatic email verification - Playwright version"""
         try:
-            # Always use agency credentials from environment variables
-            import os
-            agency_email = os.getenv('HIGHLEVEL_EMAIL')
-            agency_password = os.getenv('HIGHLEVEL_PASSWORD')
+            # Always use hardcoded agency credentials for login
+            agency_email = 'somashekhar34+MdY4KL72@gmail.com'
+            agency_password = os.getenv('HIGHLEVEL_PASSWORD', 'Dummy@123')
             
-            if not agency_email or not agency_password:
-                print("[ERROR] Agency credentials not found in environment variables!")
-                print("Required: HIGHLEVEL_EMAIL and HIGHLEVEL_PASSWORD")
-                return False
-            
-            print("="*80)
-            print("[AUTOMATION] HighLevel Complete Automation with Playwright - Automatic OTP and Full PIT Creation")
-            print("="*80)
-            print(f"[TARGET] Location ID: {location_id}")
-            print(f"[TARGET] URL: https://app.onetoo.com/v2/location/{location_id}/settings/private-integrations/")
-            print(f"[CREDENTIALS] HighLevel Email: {agency_email}")
-            print("[INFO] 2FA codes will be read automatically from Gmail")
-            print("[INFO] Private Integration Token (PIT) will be created and extracted")
-            print()
-            
-            # Step 1: Setup Browser
             print("[STEP 1] Setting up Playwright browser...")
             if not await self.setup_browser():
                 return False
