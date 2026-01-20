@@ -1514,17 +1514,27 @@ class HighLevelCompleteAutomationPlaywright:
             # Step 4: Take screenshot
             print("\n[STEP 4] Taking screenshot...")
             screenshot = await self.take_screenshot(location_id)
-            
-            # Step 5: Show success and keep browser open
+
+            # Step 5: Verify PIT token was captured before declaring success
+            if not self.pit_token:
+                print("\n" + "="*80)
+                print("[FAILED] Automation completed but NO PIT TOKEN was captured!")
+                print(f"[RESULT] Private integration may not have been created for location: {location_id}")
+                print("[INFO] Check the logs above to see where the process failed")
+                print("="*80)
+                return False
+
+            # Step 6: Show success and keep browser open
             print("\n" + "="*80)
             print("[SUCCESS] Complete automation workflow finished!")
             print(f"[RESULT] Private integration created for location: {location_id}")
+            print(f"[PIT TOKEN] Captured: {self.pit_token[:30]}...")
             if screenshot:
                 print(f"[SCREENSHOT] Screenshot saved as: {screenshot}")
             print("[INFO] Browser will remain open for you to continue working")
             print("[INFO] All tokens saved to database (check facebook_integrations table)")
             print("="*80)
-            
+
             # Keep browser open - don't close automatically
             print("\n[BROWSER] Browser will stay open. Close it manually when done.")
             return True
