@@ -5983,86 +5983,110 @@ async def get_pages_from_integration(request: dict):
                 "source": "database"
             }
         
-        # If no stored pages but we have tokens, fetch from GHL API (first-time or refresh)
+        # If no stored pages but we have tokens, fetch from Facebook Graph API using access_token
+        
+        # Check if we have access_token from facebook_integrations
+        access_token = None
+        if integration_result.data and len(integration_result.data) > 0:
+            access_token = integration_result.data[0].get('access_token')
+        
+        if not access_token:
+            print(f"[FB PAGES] No access_token found, falling back to GHL API")
+            # Fallback to GHL API if no access_token
+            ghl_api_url = f"https://services.leadconnectorhq.com/social-media-posting/{location_id}/accounts"
+            headers = {
+                "Authorization": f"Bearer {pit_token}",
+                "Version": "2021-07-28",
+                "Accept": "application/json"
+            }
             
-        print(f"[FB PAGES] No stored pages found, fetching from GHL API using location_id: {location_id}")
-        
-        # Call GHL API to get Facebook pages using the social media posting endpoint
-        ghl_api_url = f"https://services.leadconnectorhq.com/social-media-posting/{location_id}/accounts"
-        
-        headers = {
-            "Authorization": f"Bearer {pit_token}",
-            "Version": "2021-07-28",
-            "Accept": "application/json"
-        }
-        
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(ghl_api_url, headers=headers)
-            
-            if response.status_code == 200:
-                ghl_pages_data = response.json()
-                print(f"[FB PAGES] GHL API Response: {ghl_pages_data}")
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.get(ghl_api_url, headers=headers)
                 
-                # Extract accounts array from GHL response
-                ghl_accounts = ghl_pages_data.get('accounts', [])
-                
-                # Filter for Facebook accounts only
-                facebook_accounts = [acc for acc in ghl_accounts if acc.get('type') == 'facebook' or 'facebook' in acc.get('name', '').lower()]
-                
-                if not facebook_accounts:
-                    return {
-                        "success": False,
-                        "message": "Facebook OAuth completed successfully, but no pages are connected yet. Please go to GoHighLevel Integrations > Facebook and click 'Select Page(s)' to connect your Facebook pages.",
-                        "pages": [],
-                        "source": "api_empty",
-                        "next_step": "connect_pages_in_ghl"
-                    }
-                
-                # Transform GHL format to our expected format for UI consistency
-                transformed_pages = []
-                for fb_account in facebook_accounts:
-                    transformed_page = {
-                        "id": fb_account.get("id", ""),
-                        "name": fb_account.get("name", ""),
-                        "facebookPageId": fb_account.get("id", ""),
-                        "facebookPageName": fb_account.get("name", ""),
-                        "type": fb_account.get("type", "facebook"),
-                        "locationId": fb_account.get("locationId", location_id)
-                    }
-                    transformed_pages.append(transformed_page)
-                
-                print(f"[FB PAGES] Successfully retrieved {len(transformed_pages)} pages from GHL API")
-                
-                # Store the pages in database for future use
-                try:
-                    supabase.table('facebook_integrations').update({
-                        'pages': transformed_pages,
-                        'updated_at': datetime.now().isoformat()
-                    }).eq('firm_user_id', firm_user_id).execute()
-                    print(f"[FB PAGES] Stored {len(transformed_pages)} pages in database")
-                except Exception as e:
-                    print(f"[FB PAGES] Warning: Could not store pages in database: {e}")
-                
-                return {
-                    "success": True,
-                    "pages": transformed_pages,
-                    "message": f"Found {len(transformed_pages)} Facebook pages (from GHL API)",
-                    "source": "api"
-                }
-            else:
-                error_text = response.text
-                print(f"[FB PAGES] GHL API error: {response.status_code} - {error_text}")
-                
-                # If 404, likely means no Facebook pages connected yet
-                if response.status_code == 404:
-                    return {
-                        "success": False,
-                        "message": "No Facebook pages found. Please complete Facebook OAuth first or connect pages in GoHighLevel.",
-                        "pages": [],
-                        "source": "api_404"
-                    }
+                if response.status_code == 200:
+                    ghl_pages_data = response.json()
+                    ghl_accounts = ghl_pages_data.get('accounts', [])
+                    facebook_accounts = [acc for acc in ghl_accounts if acc.get('type') == 'facebook' or 'facebook' in acc.get('name', '').lower()]
+                    
+                    if not facebook_accounts:
+                        return {
+                            "success": False,
+                            "message": "Facebook OAuth completed successfully, but no pages are connected yet. Please go to GoHighLevel Integrations > Facebook and click 'Select Page(s)' to connect your Facebook pages.",
+                            "pages": [],
+                            "source": "api_empty",
+                            "next_step": "connect_pages_in_ghl"
+                        }
+                    facebook_accounts_data = facebook_accounts
                 else:
-                    raise HTTPException(status_code=response.status_code, detail=f"GHL API error: {error_text}")
+                    raise HTTPException(status_code=response.status_code, detail=f"GHL API error: {response.text}")
+        else:
+            # Use Facebook Graph API to fetch pages directly
+            print(f"[FB PAGES] Fetching pages from Facebook Graph API using access_token")
+            
+            fb_api_url = f"https://graph.facebook.com/v18.0/me/accounts"
+            params = {
+                "access_token": access_token,
+                "fields": "id,name,access_token,category,tasks"
+            }
+            
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.get(fb_api_url, params=params)
+                
+                if response.status_code == 200:
+                    fb_pages_data = response.json()
+                    print(f"[FB PAGES] Facebook Graph API Response: {fb_pages_data}")
+                    
+                    facebook_pages = fb_pages_data.get('data', [])
+                    
+                    if not facebook_pages:
+                        return {
+                            "success": False,
+                            "message": "No Facebook pages found for your account. Make sure you have admin access to at least one Facebook page.",
+                            "pages": [],
+                            "source": "facebook_api_empty"
+                        }
+                    
+                    facebook_accounts_data = facebook_pages
+                else:
+                    error_data = response.json() if response.text else {}
+                    error_msg = error_data.get('error', {}).get('message', response.text)
+                    print(f"[FB PAGES] Facebook API error: {response.status_code} - {error_msg}")
+                    raise HTTPException(status_code=response.status_code, detail=f"Facebook API error: {error_msg}")
+        
+        # Transform to our expected format for UI consistency
+        transformed_pages = []
+        for fb_account in facebook_accounts_data:
+            transformed_page = {
+                "id": fb_account.get("id", ""),
+                "name": fb_account.get("name", ""),
+                "facebookPageId": fb_account.get("id", ""),
+                "facebookPageName": fb_account.get("name", ""),
+                "type": fb_account.get("type", "facebook"),
+                "locationId": fb_account.get("locationId", location_id)
+            }
+            transformed_pages.append(transformed_page)
+        
+        print(f"[FB PAGES] Successfully retrieved {len(transformed_pages)} pages")
+        
+        # Store the pages in database for future use
+        try:
+            supabase.table('facebook_integrations').update({
+                'pages': transformed_pages,
+                'updated_at': datetime.now().isoformat()
+            }).eq('firm_user_id', firm_user_id).execute()
+            print(f"[FB PAGES] Stored {len(transformed_pages)} pages in database")
+        except Exception as e:
+            print(f"[FB PAGES] Warning: Could not store pages in database: {e}")
+        
+        # Determine source for response message
+        source = "facebook_api" if access_token else "ghl_api"
+        
+        return {
+            "success": True,
+            "pages": transformed_pages,
+            "message": f"Found {len(transformed_pages)} Facebook pages",
+            "source": source
+        }
                 
     except HTTPException:
         raise
