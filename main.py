@@ -33,15 +33,6 @@ from file_processing_service import FileProcessingService
 from background_text_processor import get_background_processor, initialize_background_processor
 from web_analysis_client import WebAnalysisClient
 
-# Optional import for Facebook OAuth interceptor (requires Playwright)
-try:
-    from facebook_oauth_interceptor import FacebookOAuthInterceptor
-    FACEBOOK_INTERCEPTOR_AVAILABLE = True
-except Exception as e:
-    print(f"[WARNING] FacebookOAuthInterceptor not available: {e}")
-    FACEBOOK_INTERCEPTOR_AVAILABLE = False
-    FacebookOAuthInterceptor = None
-
 # Handler classes
 
 # AgentMatcher class removed - replaced with simple defaults
@@ -5325,13 +5316,6 @@ async def start_oauth_with_interception(request: dict, background_tasks: Backgro
     This launches a visible browser that intercepts tokens during the OAuth flow
     """
     try:
-        # Check if interceptor is available
-        if not FACEBOOK_INTERCEPTOR_AVAILABLE or FacebookOAuthInterceptor is None:
-            raise HTTPException(
-                status_code=503, 
-                detail="Facebook OAuth interception is not available on this server. Playwright browser automation is required."
-            )
-        
         firm_user_id = request.get('firm_user_id')
         if not firm_user_id:
             raise HTTPException(status_code=400, detail="firm_user_id is required")
@@ -5378,8 +5362,18 @@ async def start_oauth_with_interception(request: dict, background_tasks: Backgro
         
         print(f"[OAUTH INTERCEPTION] 🔗 OAuth URL generated: {oauth_url[:80]}...")
         
-        # Create interceptor instance
-        interceptor = FacebookOAuthInterceptor()
+        # Import and create interceptor instance (dynamic import like other automations)
+        try:
+            print(f"[OAUTH INTERCEPTION] 📦 Loading Facebook OAuth interceptor module...")
+            from facebook_oauth_interceptor import FacebookOAuthInterceptor
+            interceptor = FacebookOAuthInterceptor()
+        except ImportError as import_error:
+            error_msg = f"Could not import FacebookOAuthInterceptor: {import_error}"
+            print(f"[OAUTH INTERCEPTION] ❌ IMPORT ERROR: {error_msg}")
+            raise HTTPException(
+                status_code=503,
+                detail="Facebook OAuth interception is not available on this server. Playwright browser automation is required."
+            )
         
         # Store session
         session_id = str(uuid.uuid4())
