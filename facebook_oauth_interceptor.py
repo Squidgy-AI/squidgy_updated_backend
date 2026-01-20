@@ -18,8 +18,59 @@ class FacebookOAuthInterceptor:
         self.pit_token = None
         self.session_active = False
         
+    async def initialize_interception(self):
+        """Initialize browser and set up interception, ready to capture tokens"""
+        try:
+            print(f"[OAUTH INTERCEPTOR] 🚀 Initializing browser for token interception...")
+            
+            # Launch Playwright
+            self.playwright = await async_playwright().start()
+            
+            # Launch browser in headless mode (Heroku doesn't have display server)
+            self.browser = await self.playwright.chromium.launch(
+                headless=True,
+                args=[
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox',
+                    '--disable-dev-shm-usage',
+                    '--disable-gpu'
+                ]
+            )
+            
+            # Create context
+            self.context = await self.browser.new_context(
+                viewport={'width': 1920, 'height': 1080},
+                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            )
+            
+            # Create page
+            self.page = await self.context.new_page()
+            
+            # Set up request interception
+            await self.page.route('**/*', self.intercept_requests)
+            
+            # Navigate to a blank page to keep the browser alive and ready
+            await self.page.goto('about:blank')
+            
+            self.session_active = True
+            
+            print(f"[OAUTH INTERCEPTOR] ✅ Browser initialized and ready to intercept tokens")
+            
+            return {
+                'success': True,
+                'message': 'Interception ready. User can now complete OAuth.'
+            }
+            
+        except Exception as e:
+            print(f"[OAUTH INTERCEPTOR] ❌ Error initializing interception: {e}")
+            await self.cleanup()
+            return {
+                'success': False,
+                'error': str(e)
+            }
+    
     async def start_session(self, oauth_url: str):
-        """Start browser session with token interception"""
+        """Start browser session with token interception (legacy method - navigates to URL)"""
         try:
             print(f"[OAUTH INTERCEPTOR] 🚀 Starting browser session...")
             

@@ -5375,6 +5375,18 @@ async def start_oauth_with_interception(request: dict, background_tasks: Backgro
                 detail="Facebook OAuth interception is not available on this server. Playwright browser automation is required."
             )
         
+        # Initialize browser and interception BEFORE returning OAuth URL
+        print(f"[OAUTH INTERCEPTION] ⏳ Initializing browser interception...")
+        init_result = await interceptor.initialize_interception()
+        
+        if not init_result.get('success'):
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to initialize interception: {init_result.get('error', 'Unknown error')}"
+            )
+        
+        print(f"[OAUTH INTERCEPTION] ✅ Interception ready, browser is listening for tokens")
+        
         # Store session
         session_id = str(uuid.uuid4())
         oauth_interceptor_sessions[session_id] = {
@@ -5384,8 +5396,8 @@ async def start_oauth_with_interception(request: dict, background_tasks: Backgro
             'started_at': datetime.now().isoformat()
         }
         
-        # Start browser session in background
-        async def run_interception():
+        # Monitor for tokens in background
+        async def monitor_for_tokens():
             try:
                 # Start session and open OAuth URL
                 await interceptor.start_session(oauth_url)
@@ -6706,6 +6718,132 @@ async def run_facebook_retry_automation(firm_user_id: str, location_id: str):
         except Exception as db_error:
             print(f"[RETRY AUTOMATION] Failed to update error status in database: {db_error}")
 
+
+
+# ============================================================================
+# FIREBASE TOKEN REFRESH ENDPOINT
+# ============================================================================
+
+@app.post("/api/ghl/refresh-firebase-token")
+async def refresh_firebase_token(request: dict, background_tasks: BackgroundTasks):
+    """
+    Check if Firebase token is older than 1 hour and refresh if needed
+    Updates ghl_subaccounts table with new token and timestamp
+    """
+    try:
+        firm_user_id = request.get('firm_user_id')
+        
+        if not firm_user_id:
+            raise HTTPException(status_code=400, detail="firm_user_id is required")
+        
+        print(f"[TOKEN REFRESH] Checking token age for firm_user_id: {firm_user_id}")
+        
+        # Get current token and timestamp from ghl_subaccounts
+        ghl_result = supabase.table('ghl_subaccounts').select(
+            'id, ghl_location_id, soma_ghl_email, soma_ghl_password, "Firebase Token", "firebase token time"'
+        ).eq('firm_user_id', firm_user_id).execute()
+        
+        if not ghl_result.data:
+            raise HTTPException(
+                status_code=404,
+                detail="No GHL subaccount found. Please complete setup first."
+            )
+        
+        ghl_record = ghl_result.data[0]
+        location_id = ghl_record.get('ghl_location_id')
+        current_token = ghl_record.get('Firebase Token')
+        token_time = ghl_record.get('firebase token time')
+        soma_email = ghl_record.get('soma_ghl_email')
+        soma_password = ghl_record.get('soma_ghl_password')
+        
+        if not location_id:
+            raise HTTPException(status_code=400, detail="GHL location_id not found")
+        
+        # Check if token needs refresh (older than 1 hour or doesn't exist)
+        needs_refresh = True
+        if token_time and current_token:
+            from datetime import datetime, timedelta
+            token_age = datetime.now() - datetime.fromisoformat(str(token_time))
+            if token_age < timedelta(hours=1):
+                needs_refresh = False
+                print(f"[TOKEN REFRESH] Token is fresh (age: {token_age}), no refresh needed")
+        
+        if not needs_refresh:
+            return {
+                "success": True,
+                "message": "Token is still valid",
+                "token_refreshed": False,
+                "token_age_minutes": int(token_age.total_seconds() / 60)
+            }
+        
+        print(f"[TOKEN REFRESH] Token needs refresh, starting automation...")
+        
+        # Start background task to refresh token
+        background_tasks.add_task(
+            run_firebase_token_refresh,
+            firm_user_id,
+            location_id,
+            soma_email,
+            soma_password
+        )
+        
+        return {
+            "success": True,
+            "message": "Token refresh started in background",
+            "token_refreshed": True,
+            "status": "refreshing"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[TOKEN REFRESH] Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def run_firebase_token_refresh(firm_user_id: str, location_id: str, email: str, password: str):
+    """Background task to refresh Firebase token using lightweight automation"""
+    try:
+        print(f"[TOKEN REFRESH] Starting token refresh automation for: {firm_user_id}")
+        
+        # Import the retry automation class (it's lightweight and just captures tokens)
+        from ghl_automation_for_retry import HighLevelRetryAutomation
+        
+        # Run the automation
+        automation = HighLevelRetryAutomation(headless=True)
+        success = await automation.run_retry_automation(email, password, location_id, firm_user_id)
+        
+        if success:
+            # Get the captured tokens
+            firebase_token = automation.firebase_token
+            access_token = automation.access_token
+            
+            if firebase_token:
+                # Update ghl_subaccounts with new token and timestamp
+                supabase.table('ghl_subaccounts').update({
+                    'Firebase Token': firebase_token,
+                    'firebase token time': datetime.now().isoformat(),
+                    'updated_at': datetime.now().isoformat()
+                }).eq('firm_user_id', firm_user_id).execute()
+                
+                print(f"[TOKEN REFRESH] ✅ Firebase token updated successfully")
+                
+                # Also update facebook_integrations if it exists
+                if access_token:
+                    supabase.table('facebook_integrations').update({
+                        'firebase_token': firebase_token,
+                        'access_token': access_token,
+                        'updated_at': datetime.now().isoformat()
+                    }).eq('firm_user_id', firm_user_id).execute()
+                    
+                    print(f"[TOKEN REFRESH] ✅ Also updated facebook_integrations table")
+            else:
+                print(f"[TOKEN REFRESH] ❌ No Firebase token captured")
+        else:
+            print(f"[TOKEN REFRESH] ❌ Token refresh automation failed")
+            
+    except Exception as e:
+        print(f"[TOKEN REFRESH] ❌ Exception in token refresh: {e}")
 
 
 # ============================================================================
