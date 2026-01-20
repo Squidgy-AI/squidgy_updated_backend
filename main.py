@@ -4755,20 +4755,23 @@ async def run_facebook_automation_registration(
                 pit_token = automation.pit_token if hasattr(automation, 'pit_token') else None
                 access_token = automation.access_token if hasattr(automation, 'access_token') else None
                 firebase_token = automation.firebase_token if hasattr(automation, 'firebase_token') else None
-                
+
                 # Extract additional metadata if available
                 token_expiry = None
                 if hasattr(automation, 'token_expiry') and automation.token_expiry:
                     token_expiry = automation.token_expiry.isoformat()
-                
+
                 # Extract Facebook business information if available
                 facebook_business_id = getattr(automation, 'facebook_business_id', None)
-                facebook_ad_account_id = getattr(automation, 'facebook_ad_account_id', None) 
+                facebook_ad_account_id = getattr(automation, 'facebook_ad_account_id', None)
                 facebook_page_id = getattr(automation, 'facebook_page_id', None)
-                
+
+                # CRITICAL: Only mark as success if PIT token was actually captured
+                is_truly_successful = bool(pit_token)
+
                 # Comprehensive automation result
                 automation_result = {
-                    'success': True,
+                    'success': is_truly_successful,
                     'pit_token_created': bool(pit_token),
                     'access_token_captured': bool(access_token),
                     'firebase_token_captured': bool(firebase_token),
@@ -4778,33 +4781,56 @@ async def run_facebook_automation_registration(
                     'facebook_page_id': facebook_page_id,
                     'automation_completed_at': datetime.now().isoformat()
                 }
-                
-                # Update Facebook integration with comprehensive success data
-                supabase.table('facebook_integrations').update({
-                    'automation_status': 'completed',
-                    'automation_step': 'completed',
-                    'automation_completed_at': datetime.now().isoformat(),
-                    'pit_token': pit_token,
-                    'access_token': access_token,
-                    'firebase_token': firebase_token,
-                    'access_token_expires_at': token_expiry,
-                    'facebook_business_id': facebook_business_id,
-                    'facebook_ad_account_id': facebook_ad_account_id,
-                    'facebook_page_id': facebook_page_id,
-                    'automation_result': automation_result,
-                    'updated_at': datetime.now().isoformat()
-                }).eq('id', facebook_record_id).execute()
-                
-                # Update ghl_subaccounts automation status
-                supabase.table('ghl_subaccounts').update({
-                    'automation_status': 'completed',
-                    'updated_at': datetime.now().isoformat()
-                }).eq('id', ghl_record_id).execute()
-                
-                print(f"[FACEBOOK REG] ✅ FACEBOOK AUTOMATION SUCCESSFUL!")
-                print(f"[FACEBOOK REG] 🎉 PIT Token: {pit_token[:30] if pit_token else 'None'}...")
-                print(f"[FACEBOOK REG] 🔑 Access Token: {'✅ Captured' if access_token else '❌ Missing'}")
-                print(f"[FACEBOOK REG] 🔥 Firebase Token: {'✅ Captured' if firebase_token else '❌ Missing'}")
+
+                if is_truly_successful:
+                    # Update Facebook integration with success data
+                    supabase.table('facebook_integrations').update({
+                        'automation_status': 'completed',
+                        'automation_step': 'completed',
+                        'automation_completed_at': datetime.now().isoformat(),
+                        'pit_token': pit_token,
+                        'access_token': access_token,
+                        'firebase_token': firebase_token,
+                        'access_token_expires_at': token_expiry,
+                        'facebook_business_id': facebook_business_id,
+                        'facebook_ad_account_id': facebook_ad_account_id,
+                        'facebook_page_id': facebook_page_id,
+                        'automation_result': automation_result,
+                        'updated_at': datetime.now().isoformat()
+                    }).eq('id', facebook_record_id).execute()
+
+                    # Update ghl_subaccounts automation status
+                    supabase.table('ghl_subaccounts').update({
+                        'automation_status': 'completed',
+                        'PIT_Token': pit_token,
+                        'updated_at': datetime.now().isoformat()
+                    }).eq('id', ghl_record_id).execute()
+
+                    print(f"[FACEBOOK REG] ✅ FACEBOOK AUTOMATION SUCCESSFUL!")
+                    print(f"[FACEBOOK REG] 🎉 PIT Token: {pit_token[:30]}...")
+                    print(f"[FACEBOOK REG] 🔑 Access Token: {'✅ Captured' if access_token else '❌ Missing'}")
+                    print(f"[FACEBOOK REG] 🔥 Firebase Token: {'✅ Captured' if firebase_token else '❌ Missing'}")
+                else:
+                    # Automation ran but NO PIT token was captured - mark as pit_failed
+                    error_msg = "PIT token was not generated by automation"
+
+                    supabase.table('facebook_integrations').update({
+                        'automation_status': 'pit_failed',
+                        'automation_step': 'pit_extraction_failed',
+                        'automation_completed_at': datetime.now().isoformat(),
+                        'automation_error': error_msg,
+                        'automation_result': automation_result,
+                        'updated_at': datetime.now().isoformat()
+                    }).eq('id', facebook_record_id).execute()
+
+                    supabase.table('ghl_subaccounts').update({
+                        'automation_status': 'pit_failed',
+                        'automation_error': error_msg,
+                        'updated_at': datetime.now().isoformat()
+                    }).eq('id', ghl_record_id).execute()
+
+                    print(f"[FACEBOOK REG] ❌ AUTOMATION COMPLETED BUT NO PIT TOKEN!")
+                    print(f"[FACEBOOK REG] Error: {error_msg}")
                 
             else:
                 # Update with failure
