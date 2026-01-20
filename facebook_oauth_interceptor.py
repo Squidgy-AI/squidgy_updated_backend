@@ -26,10 +26,15 @@ class FacebookOAuthInterceptor:
             # Launch Playwright
             self.playwright = await async_playwright().start()
             
-            # Launch browser (visible so user can complete OAuth)
+            # Launch browser in headless mode (Heroku doesn't have display server)
             self.browser = await self.playwright.chromium.launch(
-                headless=False,
-                args=['--start-maximized']
+                headless=True,
+                args=[
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox',
+                    '--disable-dev-shm-usage',
+                    '--disable-gpu'
+                ]
             )
             
             # Create context
