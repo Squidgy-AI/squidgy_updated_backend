@@ -6012,9 +6012,10 @@ async def get_pages_from_integration(request: dict):
                 if not facebook_accounts:
                     return {
                         "success": False,
-                        "message": "No Facebook pages found for your account. Please connect Facebook pages in GoHighLevel.",
+                        "message": "Facebook OAuth completed successfully, but no pages are connected yet. Please go to GoHighLevel Integrations > Facebook and click 'Select Page(s)' to connect your Facebook pages.",
                         "pages": [],
-                        "source": "api_empty"
+                        "source": "api_empty",
+                        "next_step": "connect_pages_in_ghl"
                     }
                 
                 # Transform GHL format to our expected format for UI consistency
