@@ -1552,8 +1552,19 @@ class HighLevelCompleteAutomationPlaywright:
             print(f"[ERROR] Automation failed: {e}")
             return False
         finally:
-            # Don't close browser automatically - let user close it manually
-            pass
+            # Clean up browser resources to prevent memory leaks
+            try:
+                if self.page:
+                    await self.page.close()
+                if self.context:
+                    await self.context.close()
+                if self.browser:
+                    await self.browser.close()
+                if self.playwright:
+                    await self.playwright.stop()
+                print("[CLEANUP] Browser resources cleaned up")
+            except Exception as cleanup_error:
+                print(f"[CLEANUP] Error during cleanup: {cleanup_error}")
 
 async def main():
     """Main function"""

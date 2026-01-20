@@ -6028,68 +6028,53 @@ async def get_pages_from_integration(request: dict):
         if integration_result.data and len(integration_result.data) > 0:
             access_token = integration_result.data[0].get('access_token')
         
-        if not access_token:
-            print(f"[FB PAGES] No access_token found, falling back to GHL API")
-            # Fallback to GHL API if no access_token
-            ghl_api_url = f"https://services.leadconnectorhq.com/social-media-posting/{location_id}/accounts"
-            headers = {
-                "Authorization": f"Bearer {pit_token}",
-                "Version": "2021-07-28",
-                "Accept": "application/json"
-            }
+        # Get Firebase token from ghl_subaccounts
+        if not firebase_token:
+            print(f"[FB PAGES] No firebase_token in facebook_integrations, checking ghl_subaccounts...")
+            ghl_result = supabase.table('ghl_subaccounts').select(
+                '"Firebase Token"'
+            ).eq('firm_user_id', firm_user_id).execute()
             
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.get(ghl_api_url, headers=headers)
+            if ghl_result.data and len(ghl_result.data) > 0:
+                firebase_token = ghl_result.data[0].get('Firebase Token')
+                print(f"[FB PAGES] Using Firebase token from ghl_subaccounts")
+        
+        if not firebase_token:
+            raise HTTPException(status_code=400, detail="Missing Firebase token. Please wait for token refresh to complete.")
+        
+        # Use GHL backend API to fetch Facebook pages
+        print(f"[FB PAGES] Fetching pages from GHL backend API using Firebase token")
+        
+        ghl_backend_url = f"https://backend.leadconnectorhq.com/integrations/facebook/{location_id}/allPages"
+        headers = {
+            "authorization": f"Bearer {access_token or pit_token}",
+            "token-id": firebase_token,
+            "version": "2021-07-28",
+            "Accept": "application/json"
+        }
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(ghl_backend_url, headers=headers, params={"limit": 100})
+            
+            if response.status_code == 200:
+                ghl_pages_data = response.json()
+                print(f"[FB PAGES] GHL Backend API Response: {ghl_pages_data}")
                 
-                if response.status_code == 200:
-                    ghl_pages_data = response.json()
-                    ghl_accounts = ghl_pages_data.get('accounts', [])
-                    facebook_accounts = [acc for acc in ghl_accounts if acc.get('type') == 'facebook' or 'facebook' in acc.get('name', '').lower()]
-                    
-                    if not facebook_accounts:
-                        return {
-                            "success": False,
-                            "message": "Facebook OAuth completed successfully, but no pages are connected yet. Please go to GoHighLevel Integrations > Facebook and click 'Select Page(s)' to connect your Facebook pages.",
-                            "pages": [],
-                            "source": "api_empty",
-                            "next_step": "connect_pages_in_ghl"
-                        }
-                    facebook_accounts_data = facebook_accounts
-                else:
-                    raise HTTPException(status_code=response.status_code, detail=f"GHL API error: {response.text}")
-        else:
-            # Use Facebook Graph API to fetch pages directly
-            print(f"[FB PAGES] Fetching pages from Facebook Graph API using access_token")
-            
-            fb_api_url = f"https://graph.facebook.com/v18.0/me/accounts"
-            params = {
-                "access_token": access_token,
-                "fields": "id,name,access_token,category,tasks"
-            }
-            
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.get(fb_api_url, params=params)
+                facebook_pages = ghl_pages_data.get('pages', [])
                 
-                if response.status_code == 200:
-                    fb_pages_data = response.json()
-                    print(f"[FB PAGES] Facebook Graph API Response: {fb_pages_data}")
-                    
-                    facebook_pages = fb_pages_data.get('data', [])
-                    
-                    if not facebook_pages:
-                        return {
-                            "success": False,
-                            "message": "No Facebook pages found for your account. Make sure you have admin access to at least one Facebook page.",
-                            "pages": [],
-                            "source": "facebook_api_empty"
-                        }
-                    
-                    facebook_accounts_data = facebook_pages
-                else:
-                    error_data = response.json() if response.text else {}
-                    error_msg = error_data.get('error', {}).get('message', response.text)
-                    print(f"[FB PAGES] Facebook API error: {response.status_code} - {error_msg}")
-                    raise HTTPException(status_code=response.status_code, detail=f"Facebook API error: {error_msg}")
+                if not facebook_pages:
+                    return {
+                        "success": False,
+                        "message": "No Facebook pages found. Please connect your Facebook pages in GoHighLevel first.",
+                        "pages": [],
+                        "source": "ghl_backend_empty"
+                    }
+                
+                facebook_accounts_data = facebook_pages
+            else:
+                error_data = response.json() if response.text else {}
+                error_msg = error_data.get('error', {}).get('message', response.text)
+                raise HTTPException(status_code=response.status_code, detail=f"GHL Backend API error: {error_msg}")
         
         # Transform to our expected format for UI consistency
         transformed_pages = []

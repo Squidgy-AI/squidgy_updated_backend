@@ -764,8 +764,19 @@ class HighLevelRetryAutomation:
             print(f"[ERROR] Retry automation failed: {e}")
             return False
         finally:
-            # Keep browser open for manual work
-            print("\n[BROWSER] Browser staying open for manual work...")
+            # Clean up browser resources to prevent memory leaks
+            try:
+                if self.page:
+                    await self.page.close()
+                if self.context:
+                    await self.context.close()
+                if self.browser:
+                    await self.browser.close()
+                if self.playwright:
+                    await self.playwright.stop()
+                print("[CLEANUP] Browser resources cleaned up")
+            except Exception as cleanup_error:
+                print(f"[CLEANUP] Error during cleanup: {cleanup_error}")
 
 async def main():
     """Main function for testing"""
