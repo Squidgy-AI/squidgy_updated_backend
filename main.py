@@ -33,6 +33,7 @@ from file_processing_service import FileProcessingService
 from background_text_processor import get_background_processor, initialize_background_processor
 from web_analysis_client import WebAnalysisClient
 from ghl_oauth_automation import get_oauth_automation
+from facebook_oauth_interceptor import FacebookOAuthInterceptor
 
 # Handler classes
 
@@ -5310,6 +5311,173 @@ async def extract_facebook_oauth_params(request: FacebookOAuthRequest):
         logger.error(f"💥 Unexpected error in Facebook OAuth extraction: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/api/facebook/start-oauth-with-interception")
+async def start_oauth_with_interception(request: dict, background_tasks: BackgroundTasks):
+    """
+    Start OAuth flow with browser automation token interception
+    This launches a visible browser that intercepts tokens during the OAuth flow
+    """
+    try:
+        firm_user_id = request.get('firm_user_id')
+        if not firm_user_id:
+            raise HTTPException(status_code=400, detail="firm_user_id is required")
+        
+        print(f"[OAUTH INTERCEPTION] 🚀 Starting OAuth with token interception for user: {firm_user_id}")
+        
+        # Get GHL location ID
+        ghl_result = supabase.table('ghl_subaccounts').select(
+            'ghl_location_id'
+        ).eq('firm_user_id', firm_user_id).execute()
+        
+        if not ghl_result.data or not ghl_result.data[0].get('ghl_location_id'):
+            raise HTTPException(status_code=404, detail="GHL location not found. Please complete GHL setup first.")
+        
+        ghl_location_id = ghl_result.data[0]['ghl_location_id']
+        
+        print(f"[OAUTH INTERCEPTION] ✅ Found location_id: {ghl_location_id}")
+        
+        # Generate OAuth URL
+        result = await FacebookOAuthExtractor.extract_params(ghl_location_id, ghl_location_id)
+        
+        if not result.get('success') or not result.get('params'):
+            raise HTTPException(status_code=500, detail="Failed to generate OAuth URL")
+        
+        # Build OAuth URL
+        enhancedScope = 'email,pages_show_list,pages_read_engagement,pages_manage_metadata,pages_manage_posts,pages_manage_engagement,pages_read_user_content,business_management,public_profile,read_insights,pages_manage_ads,leads_retrieval,ads_read,pages_messaging,ads_management,instagram_basic,instagram_manage_messages,instagram_manage_comments,catalog_management'
+        
+        from urllib.parse import urlencode
+        oauth_params = {
+            'response_type': result['params'].get('response_type', 'code'),
+            'client_id': result['params']['client_id'],
+            'redirect_uri': 'https://services.leadconnectorhq.com/integrations/oauth/finish',
+            'scope': enhancedScope,
+            'state': json.dumps({
+                'locationId': ghl_location_id,
+                'userId': ghl_location_id,
+                'type': 'facebook',
+                'source': 'squidgy_intercepted'
+            }),
+            'logger_id': result['params'].get('logger_id', str(uuid.uuid4()))
+        }
+        
+        oauth_url = f"https://www.facebook.com/v18.0/dialog/oauth?{urlencode(oauth_params)}"
+        
+        print(f"[OAUTH INTERCEPTION] 🔗 OAuth URL generated: {oauth_url[:80]}...")
+        
+        # Create interceptor instance
+        interceptor = FacebookOAuthInterceptor()
+        
+        # Store session
+        session_id = str(uuid.uuid4())
+        oauth_interceptor_sessions[session_id] = {
+            'interceptor': interceptor,
+            'firm_user_id': firm_user_id,
+            'ghl_location_id': ghl_location_id,
+            'started_at': datetime.now().isoformat()
+        }
+        
+        # Start browser session in background
+        async def run_interception():
+            try:
+                # Start session and open OAuth URL
+                await interceptor.start_session(oauth_url)
+                
+                # Wait for completion (5 minutes timeout)
+                result = await interceptor.wait_for_completion(timeout_seconds=300)
+                
+                if result.get('success'):
+                    tokens = await interceptor.get_captured_tokens()
+                    
+                    print(f"[OAUTH INTERCEPTION] ✅ Tokens captured!")
+                    print(f"[OAUTH INTERCEPTION] Access Token: {'✅' if tokens['access_token'] else '❌'}")
+                    print(f"[OAUTH INTERCEPTION] Firebase Token: {'✅' if tokens['firebase_token'] else '❌'}")
+                    print(f"[OAUTH INTERCEPTION] PIT Token: {'✅' if tokens['pit_token'] else '❌'}")
+                    
+                    # Save tokens to database
+                    if tokens['access_token'] or tokens['firebase_token']:
+                        # Check if facebook_integrations record exists
+                        fb_result = supabase.table('facebook_integrations').select('id').eq('firm_user_id', firm_user_id).execute()
+                        
+                        update_data = {
+                            'updated_at': datetime.now().isoformat()
+                        }
+                        
+                        if tokens['access_token']:
+                            update_data['access_token'] = tokens['access_token']
+                        if tokens['firebase_token']:
+                            update_data['firebase_token'] = tokens['firebase_token']
+                        if tokens['pit_token']:
+                            update_data['pit_token'] = tokens['pit_token']
+                        
+                        if fb_result.data and len(fb_result.data) > 0:
+                            # Update existing record
+                            supabase.table('facebook_integrations').update(update_data).eq('firm_user_id', firm_user_id).execute()
+                            print(f"[OAUTH INTERCEPTION] ✅ Updated facebook_integrations table")
+                        else:
+                            # Create new record
+                            update_data['id'] = str(uuid.uuid4())
+                            update_data['firm_user_id'] = firm_user_id
+                            update_data['ghl_location_id'] = ghl_location_id
+                            update_data['automation_status'] = 'tokens_captured'
+                            supabase.table('facebook_integrations').insert(update_data).execute()
+                            print(f"[OAUTH INTERCEPTION] ✅ Created facebook_integrations record")
+                
+                # Cleanup
+                await interceptor.cleanup()
+                
+                # Remove from sessions
+                if session_id in oauth_interceptor_sessions:
+                    del oauth_interceptor_sessions[session_id]
+                
+            except Exception as e:
+                print(f"[OAUTH INTERCEPTION] ❌ Error in background task: {e}")
+                await interceptor.cleanup()
+        
+        # Start background task
+        background_tasks.add_task(run_interception)
+        
+        return {
+            'success': True,
+            'message': 'OAuth browser opened with token interception. Please complete the login in the browser window.',
+            'session_id': session_id,
+            'oauth_url': oauth_url
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[OAUTH INTERCEPTION] ❌ Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/facebook/oauth-interception-status/{session_id}")
+async def get_oauth_interception_status(session_id: str):
+    """Check status of OAuth interception session"""
+    try:
+        if session_id not in oauth_interceptor_sessions:
+            return {
+                'success': False,
+                'message': 'Session not found or expired'
+            }
+        
+        session = oauth_interceptor_sessions[session_id]
+        interceptor = session['interceptor']
+        
+        tokens = await interceptor.get_captured_tokens()
+        
+        return {
+            'success': True,
+            'session_active': interceptor.session_active,
+            'tokens_captured': tokens['tokens_captured'],
+            'started_at': session['started_at']
+        }
+        
+    except Exception as e:
+        print(f"[OAUTH INTERCEPTION] ❌ Status check error: {e}")
+        return {
+            'success': False,
+            'error': str(e)
+        }
+
 @app.get("/api/facebook/oauth-health")
 async def facebook_oauth_health():
     """Health check for Facebook OAuth service"""
@@ -5318,6 +5486,8 @@ async def facebook_oauth_health():
         "status": "healthy",
         "endpoints": [
             "/api/facebook/extract-oauth-params",
+            "/api/facebook/start-oauth-with-interception",
+            "/api/facebook/oauth-interception-status/{session_id}",
             "/api/facebook/integrate",
             "/api/facebook/integration-status/{location_id}",
             "/api/facebook/connect-page"
@@ -5331,6 +5501,9 @@ async def facebook_oauth_health():
 
 # In-memory storage for integration status (in production, use Redis or database)
 integration_status = {}
+
+# In-memory storage for OAuth interceptor sessions
+oauth_interceptor_sessions = {}
 
 @app.post("/api/facebook/integrate")
 async def integrate_facebook(request: dict, background_tasks: BackgroundTasks):
@@ -5757,23 +5930,40 @@ async def get_pages_from_integration(request: dict):
             
         print(f"[FB PAGES] Getting pages for user: {firm_user_id}")
         
-        # Get integration record with stored pages
+        # Try to get integration record with stored pages
         integration_result = supabase.table('facebook_integrations').select(
             'ghl_location_id, pit_token, firebase_token, pages'
         ).eq('firm_user_id', firm_user_id).execute()
         
-        if not integration_result.data:
-            raise HTTPException(status_code=404, detail="No Facebook integration found. Please complete OAuth first.")
+        pit_token = None
+        firebase_token = None
+        location_id = None
+        stored_pages = None
         
-        integration = integration_result.data[0] 
-        pit_token = integration.get('pit_token')
-        firebase_token = integration.get('firebase_token')
-        location_id = integration.get('ghl_location_id')
-        stored_pages = integration.get('pages')
+        if integration_result.data and len(integration_result.data) > 0:
+            integration = integration_result.data[0] 
+            pit_token = integration.get('pit_token')
+            firebase_token = integration.get('firebase_token')
+            location_id = integration.get('ghl_location_id')
+            stored_pages = integration.get('pages')
         
-        # Check if user has completed OAuth (has tokens)
-        if not pit_token or not firebase_token:
-            raise HTTPException(status_code=400, detail="Missing tokens. Please complete Facebook OAuth first.")
+        # If no tokens in facebook_integrations, try to get from ghl_subaccounts as fallback
+        if not pit_token or not location_id:
+            print(f"[FB PAGES] No tokens in facebook_integrations, checking ghl_subaccounts...")
+            ghl_result = supabase.table('ghl_subaccounts').select(
+                'ghl_location_id, PIT_Token'
+            ).eq('firm_user_id', firm_user_id).execute()
+            
+            if ghl_result.data and len(ghl_result.data) > 0:
+                location_id = ghl_result.data[0].get('ghl_location_id')
+                pit_token = ghl_result.data[0].get('PIT_Token')
+                print(f"[FB PAGES] Using PIT token from ghl_subaccounts for location: {location_id}")
+            else:
+                raise HTTPException(status_code=404, detail="No GHL account found. Please complete GHL setup first.")
+        
+        # Check if we have the minimum required token
+        if not pit_token:
+            raise HTTPException(status_code=400, detail="Missing PIT token. Please complete GHL setup first.")
         
         # If we have tokens, first check if we have stored pages
         if stored_pages and isinstance(stored_pages, list) and len(stored_pages) > 0:
@@ -5789,16 +5979,13 @@ async def get_pages_from_integration(request: dict):
             
         print(f"[FB PAGES] No stored pages found, fetching from GHL API using location_id: {location_id}")
         
-        # Call GHL API to get Facebook pages
-        ghl_api_url = f"https://backend.leadconnectorhq.com/integrations/facebook/{location_id}/allPages?limit=20"
+        # Call GHL API to get Facebook pages using the social media posting endpoint
+        ghl_api_url = f"https://services.leadconnectorhq.com/social-media-posting/{location_id}/accounts"
         
         headers = {
-            "token-id": firebase_token,
-            "channel": "APP",
-            "source": "WEB_USER",
-            "version": "2021-07-28",
-            "accept": "application/json, text/plain, */*",
-            "content-type": "application/json"
+            "Authorization": f"Bearer {pit_token}",
+            "Version": "2021-07-28",
+            "Accept": "application/json"
         }
         
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -5808,28 +5995,30 @@ async def get_pages_from_integration(request: dict):
                 ghl_pages_data = response.json()
                 print(f"[FB PAGES] GHL API Response: {ghl_pages_data}")
                 
-                # Extract pages array from GHL response
-                ghl_pages = ghl_pages_data.get('pages', [])
+                # Extract accounts array from GHL response
+                ghl_accounts = ghl_pages_data.get('accounts', [])
                 
-                if not ghl_pages:
+                # Filter for Facebook accounts only
+                facebook_accounts = [acc for acc in ghl_accounts if acc.get('type') == 'facebook' or 'facebook' in acc.get('name', '').lower()]
+                
+                if not facebook_accounts:
                     return {
                         "success": False,
-                        "message": "No Facebook pages found for your account",
+                        "message": "No Facebook pages found for your account. Please connect Facebook pages in GoHighLevel.",
                         "pages": [],
                         "source": "api_empty"
                     }
                 
                 # Transform GHL format to our expected format for UI consistency
                 transformed_pages = []
-                for ghl_page in ghl_pages:
+                for fb_account in facebook_accounts:
                     transformed_page = {
-                        "id": ghl_page.get("facebookPageId", ""),
-                        "name": ghl_page.get("facebookPageName", ""),
-                        "facebookPageId": ghl_page.get("facebookPageId", ""),
-                        "facebookPageName": ghl_page.get("facebookPageName", ""),
-                        "facebookIgnoreMessages": ghl_page.get("facebookIgnoreMessages", False),
-                        "facebookUrl": ghl_page.get("facebookUrl", ""),
-                        "isInstagramAvailable": ghl_page.get("isInstagramAvailable", False)
+                        "id": fb_account.get("id", ""),
+                        "name": fb_account.get("name", ""),
+                        "facebookPageId": fb_account.get("id", ""),
+                        "facebookPageName": fb_account.get("name", ""),
+                        "type": fb_account.get("type", "facebook"),
+                        "locationId": fb_account.get("locationId", location_id)
                     }
                     transformed_pages.append(transformed_page)
                 
@@ -7066,6 +7255,18 @@ async def get_facebook_oauth_url(request: Request):
 # ============================================================================
 # END GHL OAUTH AUTOMATION ENDPOINTS
 # ============================================================================
+
+# ============================================================================
+# GHL MEDIA ROUTES
+# ============================================================================
+try:
+    from routes.ghl_media import router as ghl_media_router
+    app.include_router(ghl_media_router)
+    logger.info("GHL Media routes loaded successfully")
+except ImportError as e:
+    logger.warning(f"GHL Media routes not available: {e}")
+except Exception as e:
+    logger.error(f"Error loading GHL Media routes: {e}")
 
 # ============================================================================
 # MCP (Model Context Protocol) INTEGRATION
