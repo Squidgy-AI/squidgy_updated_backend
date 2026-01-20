@@ -32,7 +32,6 @@ from invitation_handler import InvitationHandler
 from file_processing_service import FileProcessingService
 from background_text_processor import get_background_processor, initialize_background_processor
 from web_analysis_client import WebAnalysisClient
-from ghl_oauth_automation import get_oauth_automation
 
 # Optional import for Facebook OAuth interceptor (requires Playwright)
 try:
