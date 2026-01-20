@@ -122,13 +122,13 @@ class HighLevelCompleteAutomationPlaywright:
             
             # First, let's search for ALL security code emails (not just unread) from the last hour
             # This ensures we get the most recent one even if older ones are unread
-            search_criteria = '(FROM "noreply@talk.onetoo.com" SUBJECT "Login security code" SINCE "' + (datetime.now() - timedelta(hours=1)).strftime("%d-%b-%Y") + '")'
+            search_criteria = '(FROM "noreply@emails.squidgy.ai" SUBJECT "Login security code" SINCE "' + (datetime.now() - timedelta(hours=1)).strftime("%d-%b-%Y") + '")'
             result, data = mail.search(None, search_criteria)
             
             if result != 'OK' or not data[0]:
                 # Fallback to unread emails if no recent emails found
                 print("[📧 EMAIL] No recent emails found, checking unread emails...")
-                search_criteria = '(FROM "noreply@talk.onetoo.com" UNSEEN SUBJECT "Login security code")'
+                search_criteria = '(FROM "noreply@emails.squidgy.ai" UNSEEN SUBJECT "Login security code")'
                 result, data = mail.search(None, search_criteria)
                 
                 if result != 'OK' or not data[0]:
@@ -1280,15 +1280,24 @@ class HighLevelCompleteAutomationPlaywright:
             print(f"[INFO] Final URL: {final_url}")
             
             # Verify we're on the correct page
+            # Handle URL-encoded redirects (e.g., ?url=%252Fv2%252F...)
+            from urllib.parse import unquote
+            decoded_url = unquote(unquote(final_url))  # Double decode for %252F -> %2F -> /
+
             if location_id in final_url and "private-integrations" in final_url:
                 print("[SUCCESS] Successfully reached private integrations page!")
                 return True
             elif "private-integrations" in final_url:
                 print("[SUCCESS] Reached private integrations page (URL may have changed)")
                 return True
-            else:
-                print(f"[WARNING] May not be on expected page. Current URL: {final_url}")
+            elif "private-integrations" in decoded_url:
+                print("[SUCCESS] Reached private integrations page (URL was encoded)")
                 return True
+            else:
+                print(f"[ERROR] Failed to reach private integrations page!")
+                print(f"[ERROR] Current URL: {final_url}")
+                print(f"[ERROR] Decoded URL: {decoded_url}")
+                return False
                 
         except Exception as e:
             print(f"[ERROR] Navigation failed: {e}")

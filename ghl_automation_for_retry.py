@@ -120,13 +120,13 @@ class HighLevelRetryAutomation:
             print("[📧 EMAIL] Searching for latest GHL security code email...")
             
             # Search for security code emails from the last hour
-            search_criteria = '(FROM "noreply@talk.onetoo.com" SUBJECT "Login security code" SINCE "' + (datetime.now() - timedelta(hours=1)).strftime("%d-%b-%Y") + '")'
+            search_criteria = '(FROM "noreply@emails.squidgy.ai" SUBJECT "Login security code" SINCE "' + (datetime.now() - timedelta(hours=1)).strftime("%d-%b-%Y") + '")'
             result, data = mail.search(None, search_criteria)
             
             if result != 'OK' or not data[0]:
                 # Fallback to unread emails
                 print("[📧 EMAIL] No recent emails found, checking unread emails...")
-                search_criteria = '(FROM "noreply@talk.onetoo.com" UNSEEN SUBJECT "Login security code")'
+                search_criteria = '(FROM "noreply@emails.squidgy.ai" UNSEEN SUBJECT "Login security code")'
                 result, data = mail.search(None, search_criteria)
                 
                 if result != 'OK' or not data[0]:
@@ -615,7 +615,7 @@ class HighLevelRetryAutomation:
     async def navigate_to_target(self, location_id: str, email: str, password: str):
         """Navigate to target URL with login and verification handling"""
         try:
-            target_url = f"https://app.onetoo.com/v2/location/{location_id}/settings/private-integrations/"
+            target_url = f"https://app.gohighlevel.com/v2/location/{location_id}/settings/private-integrations/"
             print(f"[NAVIGATE] Going directly to: {target_url}")
             
             # Go directly to the target URL
@@ -630,10 +630,21 @@ class HighLevelRetryAutomation:
             await asyncio.sleep(5)
             final_url = self.page.url
             print(f"[INFO] Final URL: {final_url}")
-            
+
+            # Verify we're on the correct page
+            from urllib.parse import unquote
+            decoded_url = unquote(unquote(final_url))
+
+            if "private-integrations" not in final_url and "private-integrations" not in decoded_url:
+                print(f"[ERROR] Failed to reach private integrations page!")
+                print(f"[ERROR] Current URL: {final_url}")
+                return False
+
+            print("[SUCCESS] Reached private integrations page!")
+
             # Extract tokens after reaching the target page
             await self.extract_tokens_from_storage()
-            
+
             return True
                 
         except Exception as e:
@@ -719,7 +730,7 @@ class HighLevelRetryAutomation:
             print("="*80)
             print(f"[TARGET] Location ID: {location_id}")
             print(f"[TARGET] Firm User ID: {firm_user_id}")
-            print(f"[TARGET] URL: https://app.onetoo.com/v2/location/{location_id}/settings/private-integrations/")
+            print(f"[TARGET] URL: https://app.gohighlevel.com/v2/location/{location_id}/settings/private-integrations/")
             print(f"[CREDENTIALS] HighLevel Email: {agency_email}")
             print("[INFO] Will capture access_token, firebase_token, and expires_at ONLY")
             print("[INFO] NO Private Integration Token creation")
