@@ -6766,7 +6766,7 @@ async def refresh_firebase_token(request: dict, background_tasks: BackgroundTask
         
         # Get current token and timestamp from ghl_subaccounts
         ghl_result = supabase.table('ghl_subaccounts').select(
-            'id, ghl_location_id, soma_ghl_email, soma_ghl_password, "Firebase Token", "firebase token time"'
+            'id, ghl_location_id, soma_ghl_email, soma_ghl_password, "Firebase Token", "firebase token time", automation_status'
         ).eq('firm_user_id', firm_user_id).execute()
         
         if not ghl_result.data:
@@ -6781,9 +6781,20 @@ async def refresh_firebase_token(request: dict, background_tasks: BackgroundTask
         token_time = ghl_record.get('firebase token time')
         soma_email = ghl_record.get('soma_ghl_email')
         soma_password = ghl_record.get('soma_ghl_password')
+        automation_status = ghl_record.get('automation_status')
         
         if not location_id:
             raise HTTPException(status_code=400, detail="GHL location_id not found")
+        
+        # Check if automation is already running
+        if automation_status in ['running', 'token_refresh_running']:
+            print(f"[TOKEN REFRESH] Automation already running, skipping duplicate request")
+            return {
+                "success": True,
+                "message": "Token refresh already in progress",
+                "token_refreshed": False,
+                "status": "already_running"
+            }
         
         # Check if token needs refresh (older than 1 hour or doesn't exist)
         needs_refresh = True
@@ -6832,6 +6843,12 @@ async def run_firebase_token_refresh(firm_user_id: str, location_id: str, email:
     try:
         print(f"[TOKEN REFRESH] Starting token refresh automation for: {firm_user_id}")
         
+        # Set status to prevent duplicate runs
+        supabase.table('ghl_subaccounts').update({
+            'automation_status': 'token_refresh_running',
+            'updated_at': datetime.now().isoformat()
+        }).eq('firm_user_id', firm_user_id).execute()
+        
         # Import the retry automation class (it's lightweight and just captures tokens)
         from ghl_automation_for_retry import HighLevelRetryAutomation
         
@@ -6849,6 +6866,7 @@ async def run_firebase_token_refresh(firm_user_id: str, location_id: str, email:
                 supabase.table('ghl_subaccounts').update({
                     'Firebase Token': firebase_token,
                     'firebase token time': datetime.now().isoformat(),
+                    'automation_status': 'completed',
                     'updated_at': datetime.now().isoformat()
                 }).eq('firm_user_id', firm_user_id).execute()
                 
@@ -6865,11 +6883,29 @@ async def run_firebase_token_refresh(firm_user_id: str, location_id: str, email:
                     print(f"[TOKEN REFRESH] ✅ Also updated facebook_integrations table")
             else:
                 print(f"[TOKEN REFRESH] ❌ No Firebase token captured")
+                # Clear running status
+                supabase.table('ghl_subaccounts').update({
+                    'automation_status': 'token_refresh_failed',
+                    'updated_at': datetime.now().isoformat()
+                }).eq('firm_user_id', firm_user_id).execute()
         else:
             print(f"[TOKEN REFRESH] ❌ Token refresh automation failed")
+            # Clear running status
+            supabase.table('ghl_subaccounts').update({
+                'automation_status': 'token_refresh_failed',
+                'updated_at': datetime.now().isoformat()
+            }).eq('firm_user_id', firm_user_id).execute()
             
     except Exception as e:
         print(f"[TOKEN REFRESH] ❌ Exception in token refresh: {e}")
+        # Clear running status on exception
+        try:
+            supabase.table('ghl_subaccounts').update({
+                'automation_status': 'token_refresh_error',
+                'updated_at': datetime.now().isoformat()
+            }).eq('firm_user_id', firm_user_id).execute()
+        except:
+            pass
 
 
 # ============================================================================
