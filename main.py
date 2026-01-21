@@ -6789,18 +6789,9 @@ async def refresh_firebase_token(request: dict, background_tasks: BackgroundTask
         if not location_id:
             raise HTTPException(status_code=400, detail="GHL location_id not found")
         
-        # Check if automation is already running
-        if automation_status in ['running', 'token_refresh_running']:
-            print(f"[TOKEN REFRESH] Automation already running, skipping duplicate request")
-            return {
-                "success": True,
-                "message": "Token refresh already in progress",
-                "token_refreshed": False,
-                "status": "already_running"
-            }
-        
         # Check if token needs refresh (older than 1 hour or doesn't exist)
         needs_refresh = True
+        token_age = None
         if token_time and current_token:
             from datetime import datetime, timedelta
             token_age = datetime.now() - datetime.fromisoformat(str(token_time))
@@ -6813,7 +6804,7 @@ async def refresh_firebase_token(request: dict, background_tasks: BackgroundTask
                 "success": True,
                 "message": "Token is still valid",
                 "token_refreshed": False,
-                "token_age_minutes": int(token_age.total_seconds() / 60)
+                "token_age_minutes": int(token_age.total_seconds() / 60) if token_age else None
             }
         
         print(f"[TOKEN REFRESH] Token needs refresh, starting automation...")
