@@ -2974,44 +2974,39 @@ async def website_analysis_complete_endpoint(
 
         logger.info(f"Found firm_id: {firm_id} for user: {request.firm_user_id}")
 
-        # Check if record already exists for this firm_user_id + agent_id + firm_id combo
+        # Check if exact record exists for (firm_user_id, agent_id, firm_id, website_url)
         existing_record = supabase.table('website_analysis')\
             .select('*')\
             .eq('firm_user_id', request.firm_user_id)\
             .eq('agent_id', request.agent_id)\
             .eq('firm_id', firm_id)\
+            .eq('website_url', normalized_url)\
             .order('last_updated_timestamp', desc=True)\
             .limit(1)\
             .execute()
 
-        cached_record = existing_record.data[0] if existing_record.data and len(existing_record.data) > 0 else None
+        # CASE 1: Exact match (including URL) exists -> return cached record
+        if existing_record.data and len(existing_record.data) > 0:
+            cached_record = existing_record.data[0]
+            logger.info(f"Cache hit: exact match found for (firm_user_id={request.firm_user_id}, agent_id={request.agent_id}, url={normalized_url})")
+            return {
+                "status": "success",
+                "cached": True,
+                "data": {
+                    "company_name": cached_record.get('company_name'),
+                    "company_description": cached_record.get('company_description'),
+                    "value_proposition": cached_record.get('value_proposition'),
+                    "business_niche": cached_record.get('business_niche'),
+                    "business_domain": cached_record.get('business_domain'),
+                    "tags": cached_record.get('tags'),
+                    "screenshot_url": cached_record.get('screenshot_url'),
+                    "favicon_url": cached_record.get('favicon_url'),
+                    "website_url": cached_record.get('website_url')
+                },
+                "message": "Analysis retrieved from cache"
+            }
 
-        # CASE 1: Record exists AND URL matches -> return cached record
-        if cached_record:
-            stored_url = normalize_url(cached_record.get('website_url', ''))
-            if stored_url == normalized_url:
-                logger.info(f"Cache hit: URL matches for combo (firm_user_id={request.firm_user_id}, agent_id={request.agent_id})")
-                return {
-                    "status": "success",
-                    "cached": True,
-                    "data": {
-                        "company_name": cached_record.get('company_name'),
-                        "company_description": cached_record.get('company_description'),
-                        "value_proposition": cached_record.get('value_proposition'),
-                        "business_niche": cached_record.get('business_niche'),
-                        "business_domain": cached_record.get('business_domain'),
-                        "tags": cached_record.get('tags'),
-                        "screenshot_url": cached_record.get('screenshot_url'),
-                        "favicon_url": cached_record.get('favicon_url'),
-                        "website_url": cached_record.get('website_url')
-                    },
-                    "message": "Analysis retrieved from cache"
-                }
-            else:
-                # CASE 2: Record exists but URL is different -> will UPDATE below
-                logger.info(f"URL changed from {stored_url} to {normalized_url} - will run fresh analysis and UPDATE")
-
-        # CASE 2 & 3: Run fresh analysis (either URL changed or no record exists)
+        # CASE 2: No exact match -> run fresh analysis and INSERT new record
         logger.info(f"Running fresh analysis for {normalized_url}")
 
         # Use local web scraping instead of external endpoint
@@ -3075,22 +3070,21 @@ async def website_analysis_complete_endpoint(
         # Remove None values
         upsert_data = {k: v for k, v in upsert_data.items() if v is not None}
 
-        # CASE 2: Record exists but URL changed -> UPDATE existing record
-        if cached_record:
-            record_id = cached_record.get('id')
-            # Remove keys that shouldn't be updated (they're part of unique constraint)
-            update_data = {k: v for k, v in upsert_data.items() if k not in ['firm_user_id', 'agent_id', 'firm_id']}
-            supabase.table('website_analysis')\
-                .update(update_data)\
-                .eq('id', record_id)\
-                .execute()
-            logger.info(f"Updated existing record (id={record_id}) with new URL: {normalized_url}")
-        else:
-            # CASE 3: No record exists -> INSERT new record
-            supabase.table('website_analysis')\
-                .insert(upsert_data)\
-                .execute()
-            logger.info(f"Inserted new record for firm_user_id: {request.firm_user_id}, agent_id: {request.agent_id}")
+        # INSERT new record (unique constraint now includes website_url)
+        supabase.table('website_analysis')\
+            .insert(upsert_data)\
+            .execute()
+        logger.info(f"Inserted new record for firm_user_id: {request.firm_user_id}, agent_id: {request.agent_id}, url: {normalized_url}")
+
+        # Fetch the latest record by timestamp to return
+        latest_record = supabase.table('website_analysis')\
+            .select('*')\
+            .eq('firm_user_id', request.firm_user_id)\
+            .eq('agent_id', request.agent_id)\
+            .eq('firm_id', firm_id)\
+            .order('last_updated_timestamp', desc=True)\
+            .limit(1)\
+            .execute()
 
         logger.info(f"Analysis saved to database for {normalized_url}")
 
@@ -3105,21 +3099,42 @@ async def website_analysis_complete_endpoint(
 
         logger.info(f"Background task scheduled for screenshot/favicon capture")
 
-        # Return analysis response immediately
-        return {
-            "status": "success",
-            "cached": False,
-            "data": {
-                "company_name": company_name,
-                "company_description": response_text,
-                "business_domain": business_domain,
-                "website_url": normalized_url,
-                "screenshot_url": None,  # Will be populated by background task
-                "favicon_url": None      # Will be populated by background task
-            },
-            "processing_assets": True,
-            "message": "Analysis completed. Screenshot and favicon are being captured in background."
-        }
+        # Return the latest record data
+        if latest_record.data and len(latest_record.data) > 0:
+            record = latest_record.data[0]
+            return {
+                "status": "success",
+                "cached": False,
+                "data": {
+                    "company_name": record.get('company_name'),
+                    "company_description": record.get('company_description'),
+                    "value_proposition": record.get('value_proposition'),
+                    "business_niche": record.get('business_niche'),
+                    "business_domain": record.get('business_domain'),
+                    "tags": record.get('tags'),
+                    "screenshot_url": record.get('screenshot_url'),
+                    "favicon_url": record.get('favicon_url'),
+                    "website_url": record.get('website_url')
+                },
+                "processing_assets": True,
+                "message": "Analysis completed. Screenshot and favicon are being captured in background."
+            }
+        else:
+            # Fallback if fetch failed (shouldn't happen)
+            return {
+                "status": "success",
+                "cached": False,
+                "data": {
+                    "company_name": company_name,
+                    "company_description": response_text,
+                    "business_domain": business_domain,
+                    "website_url": normalized_url,
+                    "screenshot_url": None,
+                    "favicon_url": None
+                },
+                "processing_assets": True,
+                "message": "Analysis completed. Screenshot and favicon are being captured in background."
+            }
 
     except Exception as e:
         logger.error(f"Error in website_analysis_complete endpoint: {str(e)}")
