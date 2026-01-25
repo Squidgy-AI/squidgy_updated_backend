@@ -2984,28 +2984,34 @@ async def website_analysis_complete_endpoint(
             .limit(1)\
             .execute()
 
-        # If combo exists, return it immediately (cache hit)
-        if existing_record.data and len(existing_record.data) > 0:
-            cached_record = existing_record.data[0]
-            logger.info(f"Returning cached record for combo (firm_user_id={request.firm_user_id}, agent_id={request.agent_id})")
-            return {
-                "status": "success",
-                "cached": True,
-                "data": {
-                    "company_name": cached_record.get('company_name'),
-                    "company_description": cached_record.get('company_description'),
-                    "value_proposition": cached_record.get('value_proposition'),
-                    "business_niche": cached_record.get('business_niche'),
-                    "business_domain": cached_record.get('business_domain'),
-                    "tags": cached_record.get('tags'),
-                    "screenshot_url": cached_record.get('screenshot_url'),
-                    "favicon_url": cached_record.get('favicon_url'),
-                    "website_url": cached_record.get('website_url')
-                },
-                "message": "Analysis retrieved from cache"
-            }
+        cached_record = existing_record.data[0] if existing_record.data and len(existing_record.data) > 0 else None
 
-        # No cached data - run fresh analysis
+        # CASE 1: Record exists AND URL matches -> return cached record
+        if cached_record:
+            stored_url = normalize_url(cached_record.get('website_url', ''))
+            if stored_url == normalized_url:
+                logger.info(f"Cache hit: URL matches for combo (firm_user_id={request.firm_user_id}, agent_id={request.agent_id})")
+                return {
+                    "status": "success",
+                    "cached": True,
+                    "data": {
+                        "company_name": cached_record.get('company_name'),
+                        "company_description": cached_record.get('company_description'),
+                        "value_proposition": cached_record.get('value_proposition'),
+                        "business_niche": cached_record.get('business_niche'),
+                        "business_domain": cached_record.get('business_domain'),
+                        "tags": cached_record.get('tags'),
+                        "screenshot_url": cached_record.get('screenshot_url'),
+                        "favicon_url": cached_record.get('favicon_url'),
+                        "website_url": cached_record.get('website_url')
+                    },
+                    "message": "Analysis retrieved from cache"
+                }
+            else:
+                # CASE 2: Record exists but URL is different -> will UPDATE below
+                logger.info(f"URL changed from {stored_url} to {normalized_url} - will run fresh analysis and UPDATE")
+
+        # CASE 2 & 3: Run fresh analysis (either URL changed or no record exists)
         logger.info(f"Running fresh analysis for {normalized_url}")
 
         # Use local web scraping instead of external endpoint
@@ -3069,11 +3075,22 @@ async def website_analysis_complete_endpoint(
         # Remove None values
         upsert_data = {k: v for k, v in upsert_data.items() if v is not None}
 
-        # Insert new record (we only reach here if no record exists for this combo)
-        supabase.table('website_analysis')\
-            .insert(upsert_data)\
-            .execute()
-        logger.info(f"Inserted new record for firm_user_id: {request.firm_user_id}, agent_id: {request.agent_id}")
+        # CASE 2: Record exists but URL changed -> UPDATE existing record
+        if cached_record:
+            record_id = cached_record.get('id')
+            # Remove keys that shouldn't be updated (they're part of unique constraint)
+            update_data = {k: v for k, v in upsert_data.items() if k not in ['firm_user_id', 'agent_id', 'firm_id']}
+            supabase.table('website_analysis')\
+                .update(update_data)\
+                .eq('id', record_id)\
+                .execute()
+            logger.info(f"Updated existing record (id={record_id}) with new URL: {normalized_url}")
+        else:
+            # CASE 3: No record exists -> INSERT new record
+            supabase.table('website_analysis')\
+                .insert(upsert_data)\
+                .execute()
+            logger.info(f"Inserted new record for firm_user_id: {request.firm_user_id}, agent_id: {request.agent_id}")
 
         logger.info(f"Analysis saved to database for {normalized_url}")
 
