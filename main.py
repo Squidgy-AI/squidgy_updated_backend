@@ -708,11 +708,12 @@ class WebsiteAnalysisCompleteRequest(BaseModel):
 # URL normalization function to ensure consistent URL comparison
 def normalize_url(url: str) -> str:
     """
-    Normalize URL for consistent comparison.
+    Normalize URL to consistent format: https://www.domain.com
     - Adds https:// if no protocol
+    - Always adds www. prefix if not present
     - Removes trailing slashes
     - Converts to lowercase
-    - Ensures www.google.com == https://www.google.com == http://www.google.com
+    - Example: google.com -> https://www.google.com
     """
     from urllib.parse import urlparse, urlunparse
 
@@ -724,13 +725,18 @@ def normalize_url(url: str) -> str:
 
     parsed = urlparse(url)
 
+    # Get the netloc (domain) and ensure www. prefix
+    netloc = parsed.netloc
+    if not netloc.startswith('www.'):
+        netloc = 'www.' + netloc
+
     # Rebuild URL without trailing slash on path
     path = parsed.path.rstrip('/') or ''
 
-    # Return normalized URL (always https, no trailing slash)
+    # Return normalized URL (always https://www.domain.com format)
     normalized = urlunparse((
-        'https',  # Always use https for storage
-        parsed.netloc,
+        'https',  # Always use https
+        netloc,   # Always www. prefix
         path,
         '',  # params
         '',  # query (remove for base comparison)
