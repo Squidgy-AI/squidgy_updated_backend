@@ -556,7 +556,10 @@ conversational_handler = ConversationalHandler(
 # client_kb_manager = ClientKBManager(supabase_client=supabase)  # Removed
 # dynamic_agent_kb_handler = DynamicAgentKBHandler(supabase_client=supabase)  # Removed
 file_processing_service = FileProcessingService(supabase_client=supabase)
-background_processor = initialize_background_processor(supabase_client=supabase)
+background_processor = initialize_background_processor(
+    supabase_client=supabase,
+    n8n_save_knowledge_url=os.environ.get("N8N_SAVE_KNOWLEDGE_URL", "https://n8n.theaiteam.uk/webhook/save-knowledge")
+)
 
 print("Application initialized")
 
