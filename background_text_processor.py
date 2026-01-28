@@ -8,7 +8,8 @@ import json
 import logging
 import tempfile
 import os
-from typing import Optional, Dict, Any
+import re
+from typing import Optional, Dict, Any, List
 import httpx
 from pathlib import Path
 
@@ -138,6 +139,65 @@ class BackgroundTextProcessor:
         except Exception as e:
             raise Exception(f"File download error: {str(e)}")
     
+    @staticmethod
+    def chunk_text(text: str, chunk_size: int = 1500, chunk_overlap: int = 200) -> List[str]:
+        """Split text into chunks with overlap, breaking at sentence/paragraph boundaries."""
+        if not text or not text.strip():
+            return []
+
+        # If text fits in one chunk, return as-is
+        if len(text) <= chunk_size:
+            return [text.strip()]
+
+        chunks = []
+        start = 0
+
+        while start < len(text):
+            end = start + chunk_size
+
+            # If this is the last chunk, take the rest
+            if end >= len(text):
+                chunk = text[start:].strip()
+                if chunk:
+                    chunks.append(chunk)
+                break
+
+            # Try to break at paragraph boundary (double newline)
+            segment = text[start:end]
+            break_pos = segment.rfind('\n\n')
+
+            # Fallback: break at single newline
+            if break_pos == -1 or break_pos < chunk_size * 0.3:
+                break_pos = segment.rfind('\n')
+
+            # Fallback: break at sentence end (. ! ?)
+            if break_pos == -1 or break_pos < chunk_size * 0.3:
+                sentence_match = None
+                for m in re.finditer(r'[.!?]\s', segment):
+                    if m.start() >= chunk_size * 0.3:
+                        sentence_match = m
+                if sentence_match:
+                    break_pos = sentence_match.end()
+
+            # Fallback: break at space
+            if break_pos == -1 or break_pos < chunk_size * 0.3:
+                break_pos = segment.rfind(' ')
+
+            # Last resort: hard cut
+            if break_pos == -1 or break_pos < chunk_size * 0.3:
+                break_pos = chunk_size
+
+            chunk = text[start:start + break_pos].strip()
+            if chunk:
+                chunks.append(chunk)
+
+            # Move start forward, accounting for overlap
+            start = start + break_pos - chunk_overlap
+            if start < 0:
+                start = 0
+
+        return chunks
+
     def extract_text(self, file_bytes: bytes, file_name: str) -> str:
         """Extract text based on file extension"""
         file_ext = Path(file_name).suffix.lower()

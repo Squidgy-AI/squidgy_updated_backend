@@ -7042,10 +7042,17 @@ async def extract_text_from_file(
 
         logger.info(f"Extracted {len(extracted_text)} chars from {file_name}")
 
+        # Chunk the text for embedding-safe sizes
+        chunks = processor.chunk_text(extracted_text, chunk_size=1500, chunk_overlap=200)
+
+        logger.info(f"Split into {len(chunks)} chunks for {file_name}")
+
         return {
             "success": True,
             "file_name": file_name,
             "extracted_text": extracted_text,
+            "chunks": chunks,
+            "chunk_count": len(chunks),
             "char_count": len(extracted_text),
         }
 
