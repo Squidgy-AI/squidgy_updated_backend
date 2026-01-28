@@ -5574,24 +5574,54 @@ async def check_facebook_accounts_after_oauth(request: dict):
         
         print(f"📱 [OAUTH CHECK] Checking for new Facebook accounts with PIT token...")
         
+        # Get Firebase token for token-id header
+        firebase_token = None
+        if isinstance(tokens, dict):
+            firebase_token = tokens.get('tokens', {}).get('firebase_token')
+        
+        if not firebase_token:
+            print(f"📱 [OAUTH CHECK] No firebase_token found, trying to fetch from ghl_subaccounts...")
+            ghl_result = supabase.table('ghl_subaccounts').select(
+                '"Firebase Token"'
+            ).eq('firm_user_id', firm_user_uuid).execute()
+            
+            if ghl_result.data and len(ghl_result.data) > 0:
+                firebase_token = ghl_result.data[0].get('Firebase Token')
+        
         # Check for Facebook accounts using PIT token
         import httpx
         headers = {
             "Authorization": f"Bearer {pit_token}",
-            "Version": "2021-07-28",
-            "Accept": "application/json"
+            "version": "2021-07-28",
+            "Accept": "application/json",
+            "channel": "APP",
+            "source": "WEB_USER"
         }
         
+        # Add token-id header if we have firebase_token
+        if firebase_token:
+            headers["token-id"] = firebase_token
+        
         async with httpx.AsyncClient(timeout=30.0) as client:
-            accounts_url = f"https://services.leadconnectorhq.com/social-media-posting/{target_location_id}/accounts"
+            # Use the correct endpoint: /social-media-posting/{locationId}/accounts?fetchAll=true
+            accounts_url = f"https://backend.leadconnectorhq.com/social-media-posting/{target_location_id}/accounts?fetchAll=true"
             response = await client.get(accounts_url, headers=headers)
             
             if response.status_code == 200:
                 accounts_data = response.json()
+                print(f"📱 [OAUTH CHECK] Raw API response: {accounts_data}")
                 facebook_accounts = []
                 
-                if 'results' in accounts_data and 'accounts' in accounts_data['results']:
+                # Handle different response structures
+                if isinstance(accounts_data, list):
+                    # Direct array of accounts
+                    facebook_accounts = [acc for acc in accounts_data if acc.get('platform') == 'facebook']
+                elif 'results' in accounts_data and 'accounts' in accounts_data['results']:
+                    # Nested structure
                     facebook_accounts = [acc for acc in accounts_data['results']['accounts'] if acc.get('platform') == 'facebook']
+                elif 'accounts' in accounts_data:
+                    # Simple accounts key
+                    facebook_accounts = [acc for acc in accounts_data['accounts'] if acc.get('platform') == 'facebook']
                 
                 if facebook_accounts:
                     # Found Facebook account(s)! Store the first one
