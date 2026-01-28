@@ -6778,6 +6778,61 @@ async def run_facebook_retry_automation(firm_user_id: str, location_id: str):
 # FIREBASE TOKEN REFRESH ENDPOINT
 # ============================================================================
 
+@app.post("/api/ghl/run-complete-automation")
+async def run_complete_automation(request: dict, background_tasks: BackgroundTasks):
+    """
+    Run complete GHL automation including PIT creation
+    Calls BackgroundAutomationUser1 service to handle Playwright automation
+    Updates ghl_subaccounts table with PIT_Token, Firebase Token, and timestamps
+    """
+    try:
+        firm_user_id = request.get('firm_user_id')
+        location_id = request.get('location_id')
+        
+        if not firm_user_id or not location_id:
+            raise HTTPException(status_code=400, detail="firm_user_id and location_id are required")
+        
+        print(f"[COMPLETE AUTOMATION] Starting for firm_user_id: {firm_user_id}, location: {location_id}")
+        
+        # Call BackgroundAutomationUser1 service
+        automation_service_url = os.getenv('AUTOMATION_USER1_SERVICE_URL', 'https://backgroundautomationuser1-1644057ede7b.herokuapp.com')
+        
+        print(f"[COMPLETE AUTOMATION] Calling BackgroundAutomationUser1 service at: {automation_service_url}")
+        
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            response = await client.post(
+                f"{automation_service_url}/ghl/complete-automation",
+                json={
+                    "location_id": location_id,
+                    "firm_user_id": firm_user_id
+                }
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                print(f"[COMPLETE AUTOMATION] Service responded: {result.get('message')}")
+                print(f"[COMPLETE AUTOMATION] Task ID: {result.get('task_id')}")
+                
+                return {
+                    "success": True,
+                    "message": "Complete automation started in background",
+                    "task_id": result.get('task_id'),
+                    "status": "running"
+                }
+            else:
+                print(f"[COMPLETE AUTOMATION] Service error: {response.status_code} - {response.text}")
+                raise HTTPException(
+                    status_code=response.status_code,
+                    detail=f"Automation service error: {response.text}"
+                )
+                
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[COMPLETE AUTOMATION] Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/api/ghl/refresh-firebase-token")
 async def refresh_firebase_token(request: dict, background_tasks: BackgroundTasks):
     """
