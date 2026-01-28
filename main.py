@@ -6858,7 +6858,7 @@ async def refresh_firebase_token(request: dict, background_tasks: BackgroundTask
 
 
 async def run_firebase_token_refresh(firm_user_id: str, location_id: str, email: str, password: str):
-    """Background task to refresh Firebase token using lightweight automation"""
+    """Background task to refresh Firebase token by calling BackgroundAutomationUser1 service"""
     try:
         print(f"[TOKEN REFRESH] Starting token refresh automation for: {firm_user_id}")
         
@@ -6868,59 +6868,41 @@ async def run_firebase_token_refresh(firm_user_id: str, location_id: str, email:
             'updated_at': datetime.now().isoformat()
         }).eq('firm_user_id', firm_user_id).execute()
         
-        # Import the retry automation class (it's lightweight and just captures tokens)
-        from ghl_automation_for_retry import HighLevelRetryAutomation
+        # Call BackgroundAutomationUser1 service
+        automation_service_url = os.getenv('AUTOMATION_USER1_SERVICE_URL', 'https://backgroundautomationuser1-1644057ede7b.herokuapp.com')
         
-        # Run the automation
-        automation = HighLevelRetryAutomation(headless=True)
-        success = await automation.run_retry_automation(email, password, location_id, firm_user_id)
+        print(f"[TOKEN REFRESH] Calling BackgroundAutomationUser1 service at: {automation_service_url}")
         
-        if success:
-            # Get the captured tokens
-            firebase_token = automation.firebase_token
-            access_token = automation.access_token
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            response = await client.post(
+                f"{automation_service_url}/ghl/retry-automation",
+                json={
+                    "location_id": location_id,
+                    "firm_user_id": firm_user_id
+                }
+            )
             
-            if firebase_token:
-                # Update ghl_subaccounts with new token and timestamp
-                supabase.table('ghl_subaccounts').update({
-                    'Firebase Token': firebase_token,
-                    'firebase token time': datetime.now().isoformat(),
-                    'automation_status': 'completed',
-                    'updated_at': datetime.now().isoformat()
-                }).eq('firm_user_id', firm_user_id).execute()
-                
-                print(f"[TOKEN REFRESH] ✅ Firebase token updated successfully")
-                
-                # Also update facebook_integrations if it exists
-                if access_token:
-                    supabase.table('facebook_integrations').update({
-                        'firebase_token': firebase_token,
-                        'access_token': access_token,
-                        'updated_at': datetime.now().isoformat()
-                    }).eq('firm_user_id', firm_user_id).execute()
-                    
-                    print(f"[TOKEN REFRESH] ✅ Also updated facebook_integrations table")
+            if response.status_code == 200:
+                result = response.json()
+                print(f"[TOKEN REFRESH] Automation service responded: {result.get('message')}")
+                print(f"[TOKEN REFRESH] Task ID: {result.get('task_id')}")
+                print(f"[TOKEN REFRESH] Automation is running on remote service, database will be updated automatically")
             else:
-                print(f"[TOKEN REFRESH] ❌ No Firebase token captured")
+                print(f"[TOKEN REFRESH] Automation service error: {response.status_code} - {response.text}")
                 # Clear running status
                 supabase.table('ghl_subaccounts').update({
                     'automation_status': 'token_refresh_failed',
+                    'automation_error': f"Service returned {response.status_code}",
                     'updated_at': datetime.now().isoformat()
                 }).eq('firm_user_id', firm_user_id).execute()
-        else:
-            print(f"[TOKEN REFRESH] ❌ Token refresh automation failed")
-            # Clear running status
-            supabase.table('ghl_subaccounts').update({
-                'automation_status': 'token_refresh_failed',
-                'updated_at': datetime.now().isoformat()
-            }).eq('firm_user_id', firm_user_id).execute()
             
     except Exception as e:
-        print(f"[TOKEN REFRESH] ❌ Exception in token refresh: {e}")
+        print(f"[TOKEN REFRESH] Exception calling automation service: {e}")
         # Clear running status on exception
         try:
             supabase.table('ghl_subaccounts').update({
                 'automation_status': 'token_refresh_error',
+                'automation_error': str(e),
                 'updated_at': datetime.now().isoformat()
             }).eq('firm_user_id', firm_user_id).execute()
         except:
