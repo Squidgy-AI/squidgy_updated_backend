@@ -556,10 +556,7 @@ conversational_handler = ConversationalHandler(
 # client_kb_manager = ClientKBManager(supabase_client=supabase)  # Removed
 # dynamic_agent_kb_handler = DynamicAgentKBHandler(supabase_client=supabase)  # Removed
 file_processing_service = FileProcessingService(supabase_client=supabase)
-background_processor = initialize_background_processor(
-    supabase_client=supabase,
-    n8n_save_knowledge_url=os.environ.get("N8N_SAVE_KNOWLEDGE_URL", "https://n8n.theaiteam.uk/webhook/save-knowledge")
-)
+background_processor = initialize_background_processor(supabase_client=supabase)
 
 print("Application initialized")
 
@@ -7007,6 +7004,57 @@ async def process_file_from_url(
     except Exception as e:
         logger.error(f"Error in file processing endpoint: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+@app.post("/api/file/extract-text")
+async def extract_text_from_file(
+    file_url: str = Form(...),
+    file_name: str = Form(...),
+):
+    """
+    Synchronous text extraction from a file URL.
+    Called by n8n workflow to extract text from PDF, DOCX, JSON, TXT, MD files.
+
+    Parameters:
+    - file_url: Supabase storage URL (or any public URL)
+    - file_name: Original filename (used to detect file type by extension)
+
+    Returns:
+    - extracted_text: The extracted text content
+    """
+    try:
+        logger.info(f"Extract-text request: {file_name} from {file_url[:80]}...")
+
+        processor = get_background_processor()
+        if not processor:
+            raise HTTPException(status_code=500, detail="Background processor not initialized")
+
+        # Download file
+        file_bytes = await processor.download_file(file_url)
+
+        if not file_bytes:
+            raise HTTPException(status_code=400, detail="Empty file downloaded")
+
+        # Extract text
+        extracted_text = processor.extract_text(file_bytes, file_name)
+
+        if not extracted_text or not extracted_text.strip():
+            raise HTTPException(status_code=400, detail="No text content found in file")
+
+        logger.info(f"Extracted {len(extracted_text)} chars from {file_name}")
+
+        return {
+            "success": True,
+            "file_name": file_name,
+            "extracted_text": extracted_text,
+            "char_count": len(extracted_text),
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Text extraction failed for {file_name}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Extraction failed: {str(e)}")
+
 
 @app.get("/api/file/status/{file_id}")
 async def get_file_processing_status(file_id: str):

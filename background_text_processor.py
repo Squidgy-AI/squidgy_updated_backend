@@ -120,10 +120,9 @@ class TextExtractor:
 class BackgroundTextProcessor:
     """Handles background processing of file text extraction"""
 
-    def __init__(self, supabase_client, n8n_save_knowledge_url: str = None):
+    def __init__(self, supabase_client):
         self.supabase = supabase_client
         self.text_extractor = TextExtractor()
-        self.n8n_save_knowledge_url = n8n_save_knowledge_url or os.environ.get("N8N_SAVE_KNOWLEDGE_URL", "")
     
     async def download_file(self, file_url: str) -> bytes:
         """Download file from URL and return bytes"""
@@ -188,38 +187,7 @@ class BackgroundTextProcessor:
         except Exception as e:
             logger.error(f"Database update error for {file_id}: {e}")
     
-    async def send_to_n8n_knowledge_base(
-        self,
-        user_id: str,
-        agent_id: str,
-        file_name: str,
-        extracted_text: str,
-    ):
-        """Send extracted text to n8n SA_Knowledge_Base_Save webhook for embedding + KB storage"""
-        if not self.n8n_save_knowledge_url:
-            logger.warning("N8N_SAVE_KNOWLEDGE_URL not configured, skipping KB save")
-            return
-
-        payload = {
-            "user_id": user_id,
-            "agent_id": agent_id,
-            "type": "text",
-            "content": f"File: {file_name}\n\n{extracted_text}",
-            "category": "documents",
-        }
-
-        try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(
-                    self.n8n_save_knowledge_url,
-                    json=payload,
-                )
-                response.raise_for_status()
-                logger.info(f"Sent extracted text to n8n KB for file: {file_name}")
-        except Exception as e:
-            logger.error(f"Failed to send to n8n KB: {e}")
-
-    async def process_file(self, file_id: str, user_id: str = None, agent_id: str = None):
+    async def process_file(self, file_id: str):
         """Main processing function for a file"""
         try:
             # Get file record from database
@@ -261,17 +229,6 @@ class BackgroundTextProcessor:
 
             logger.info(f"Successfully processed file {file_id}")
 
-            # Send extracted text to n8n for embedding + KB storage
-            resolved_user_id = user_id or file_record.get("firm_user_id", "")
-            resolved_agent_id = agent_id or file_record.get("agent_id", "personal_assistant")
-
-            await self.send_to_n8n_knowledge_base(
-                user_id=resolved_user_id,
-                agent_id=resolved_agent_id,
-                file_name=file_record["file_name"],
-                extracted_text=extracted_text,
-            )
-
         except Exception as e:
             error_msg = str(e)
             logger.error(f"Processing failed for {file_id}: {error_msg}")
@@ -292,8 +249,8 @@ def get_background_processor():
     global _background_processor
     return _background_processor
 
-def initialize_background_processor(supabase_client, n8n_save_knowledge_url: str = None):
+def initialize_background_processor(supabase_client):
     """Initialize the global background processor"""
     global _background_processor
-    _background_processor = BackgroundTextProcessor(supabase_client, n8n_save_knowledge_url)
+    _background_processor = BackgroundTextProcessor(supabase_client)
     return _background_processor
