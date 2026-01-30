@@ -201,12 +201,16 @@ class BackgroundTextProcessor:
     def extract_text(self, file_bytes: bytes, file_name: str) -> str:
         """Extract text based on file extension"""
         file_ext = Path(file_name).suffix.lower()
-        
+
+        # Handle image files - no text extraction needed, Claude can process images directly
+        if file_ext in ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp']:
+            return f"[Image file: {file_name}]"
+
         if file_ext == '.pdf':
             return self.text_extractor.extract_from_pdf(file_bytes)
         elif file_ext in ['.txt', '.md', '.markdown']:
             return self.text_extractor.extract_from_txt(file_bytes)
-        elif file_ext == '.json':
+        elif file_ext in ['.json']:
             return self.text_extractor.extract_from_json(file_bytes)
         elif file_ext in ['.docx', '.doc']:
             return self.text_extractor.extract_from_docx(file_bytes)
