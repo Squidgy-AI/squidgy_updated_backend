@@ -52,6 +52,8 @@ async def get_ghl_tokens(firm_user_id: str, agent_id: str = "SOL"):
     Fetch GHL location_id, Firebase Token, and Access Token from database
     """
     try:
+        logger.info(f"[SOCIAL FB] Fetching GHL tokens for user: {firm_user_id}, agent: {agent_id}")
+
         # Get location_id and Firebase Token from ghl_subaccounts
         ghl_result = supabase.table('ghl_subaccounts')\
             .select('ghl_location_id, "Firebase Token", "PIT_Token", soma_ghl_user_id')\
@@ -61,7 +63,10 @@ async def get_ghl_tokens(firm_user_id: str, agent_id: str = "SOL"):
             .execute()
 
         if not ghl_result.data:
+            logger.warning(f"[SOCIAL FB] No ghl_subaccounts record found for user: {firm_user_id}")
             return None
+
+        logger.info(f"[SOCIAL FB] Found GHL location: {ghl_result.data.get('ghl_location_id')}")
 
         # Get access_token from facebook_integrations (fallback to PIT_Token if not available)
         access_token = None
@@ -165,6 +170,8 @@ async def get_connected_facebook_accounts(request: StartOAuthRequest):
                 detail="Missing required tokens"
             )
 
+        logger.info(f"[SOCIAL FB] Fetching connected accounts for location: {location_id}")
+
         # Call GHL API to get all accounts
         async with httpx.AsyncClient() as client:
             response = await client.get(
@@ -182,10 +189,19 @@ async def get_connected_facebook_accounts(request: StartOAuthRequest):
             )
 
             if not response.is_success:
-                raise HTTPException(
-                    status_code=response.status_code,
-                    detail=f"GHL API error: {response.text}"
-                )
+                logger.error(f"[SOCIAL FB] GHL API returned {response.status_code}: {response.text}")
+
+                # Provide more helpful error messages
+                if response.status_code == 401:
+                    raise HTTPException(
+                        status_code=401,
+                        detail="GHL authentication failed. Your access tokens may be expired. Please reconnect your GHL account in Settings."
+                    )
+                else:
+                    raise HTTPException(
+                        status_code=response.status_code,
+                        detail=f"GHL API error: {response.text}"
+                    )
 
             data = response.json()
 
