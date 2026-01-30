@@ -2943,6 +2943,109 @@ async def capture_screenshot_and_favicon_background(
         logger.error(f"Error in background screenshot/favicon capture: {str(e)}")
 
 
+async def analyze_website_content_with_ai(scraped_content: str, url: str) -> dict:
+    """
+    Use AI to analyze scraped website content and extract structured fields.
+
+    Args:
+        scraped_content: The raw scraped content from the website
+        url: The website URL for context
+
+    Returns:
+        dict with extracted fields: company_name, value_proposition, business_niche, tags
+    """
+    try:
+        import openai
+        from openai import AsyncOpenAI
+
+        client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+
+        # Check if content is minimal (less than 100 characters excluding the header)
+        content_without_header = scraped_content.replace("WEBSITE SCRAPING RESULTS", "").replace("="*80, "").strip()
+
+        # If minimal content detected, use OpenRouter Web Search instead
+        if len(content_without_header) < 200 or "END OF SCRAPING RESULTS" in scraped_content and content_without_header.count('\n') < 10:
+            logger.warning(f"Minimal content detected for {url}, using OpenRouter Web Search")
+            from Website.web_analysis import openrouter_web_search_fallback
+
+            # Use OpenRouter to get better content
+            fallback_result = openrouter_web_search_fallback(url)
+            if fallback_result.get('status') != 'error' and fallback_result.get('content'):
+                scraped_content = fallback_result.get('content')
+                logger.info(f"Using OpenRouter Web Search content for analysis")
+
+        # Create AI prompt to extract structured information
+        prompt = f"""Analyze the following website content and extract key business information.
+
+Website URL: {url}
+Website Content:
+{scraped_content}
+
+Extract and provide the following information in JSON format:
+{{
+  "company_name": "The company or product name",
+  "value_proposition": "A concise statement (1-2 sentences) explaining the unique value or benefit this company/product offers",
+  "business_niche": "The specific industry, market segment, or business category (e.g., 'Fitness & Wellness', 'SaaS Project Management', 'E-commerce Fashion')",
+  "tags": ["tag1", "tag2", "tag3", "tag4", "tag5"] // 3-5 relevant keywords or categories
+}}
+
+Guidelines:
+- If the company name is not clearly stated, extract it from the title or domain
+- Value proposition should focus on WHAT they offer and WHY it matters to customers
+- Business niche should be specific (2-4 words describing their market)
+- Tags should be relevant keywords for categorization (lowercase, no special characters)
+- If any field cannot be determined from the content, use null
+
+Provide ONLY the JSON response, no additional text."""
+
+        # Call OpenAI API
+        response = await client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are a business analyst expert at extracting key information from website content. Always respond with valid JSON only."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.3,
+            max_tokens=500
+        )
+
+        # Parse the AI response
+        ai_response = response.choices[0].message.content.strip()
+        logger.info(f"AI analysis response: {ai_response}")
+
+        # Extract JSON from response (handle cases where AI adds markdown code blocks)
+        import json
+        import re
+
+        # Try to find JSON in the response
+        json_match = re.search(r'```json\s*(.*?)\s*```', ai_response, re.DOTALL)
+        if json_match:
+            json_str = json_match.group(1)
+        else:
+            # Try to find JSON without code blocks
+            json_match = re.search(r'\{.*\}', ai_response, re.DOTALL)
+            if json_match:
+                json_str = json_match.group(0)
+            else:
+                json_str = ai_response
+
+        # Parse JSON
+        extracted_data = json.loads(json_str)
+
+        logger.info(f"Extracted data: {extracted_data}")
+        return extracted_data
+
+    except Exception as e:
+        logger.error(f"Error in AI analysis: {str(e)}")
+        # Return empty structure on error
+        return {
+            "company_name": None,
+            "value_proposition": None,
+            "business_niche": None,
+            "tags": None
+        }
+
+
 @app.post("/api/website/analysis_complete")
 async def website_analysis_complete_endpoint(
     request: WebsiteAnalysisCompleteRequest,
@@ -3028,9 +3131,18 @@ async def website_analysis_complete_endpoint(
         analysis_data = analysis_result.get('data', {})
         response_text = analysis_data.get('response_text', '')
 
-        # Extract company name from response
-        company_name = None
-        if 'TITLE:' in response_text:
+        # Use AI to extract structured information from scraped content
+        logger.info(f"Running AI analysis on scraped content for {normalized_url}")
+        ai_extracted = await analyze_website_content_with_ai(response_text, request.url)
+
+        # Get extracted values from AI (with fallback to basic extraction)
+        company_name = ai_extracted.get('company_name')
+        value_proposition = ai_extracted.get('value_proposition')
+        business_niche = ai_extracted.get('business_niche')
+        tags = ai_extracted.get('tags')
+
+        # Fallback: Extract company name from title if AI didn't find it
+        if not company_name and 'TITLE:' in response_text:
             title_start = response_text.find('TITLE:') + 6
             title_end = response_text.find('\n', title_start)
             if title_end > title_start:
@@ -3066,6 +3178,9 @@ async def website_analysis_complete_endpoint(
             'website_url': normalized_url,
             'company_name': company_name,
             'company_description': response_text,
+            'value_proposition': value_proposition,
+            'business_niche': business_niche,
+            'tags': tags,
             'business_domain': business_domain,
             'analysis_status': 'completed',
             'last_updated_timestamp': datetime.now(timezone.utc).isoformat(),
