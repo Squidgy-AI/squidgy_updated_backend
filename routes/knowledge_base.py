@@ -8,15 +8,18 @@ import logging
 from typing import List, Dict, Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-import httpx
+import asyncpg
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/knowledge-base", tags=["knowledge_base"])
 
-# Neon REST API configuration
-NEON_API_URL = os.getenv('NEON_API_URL')
-NEON_API_KEY = os.getenv('NEON_API_KEY')
+# Neon PostgreSQL configuration
+NEON_DB_HOST = os.getenv('NEON_DB_HOST')
+NEON_DB_PORT = os.getenv('NEON_DB_PORT', '5432')
+NEON_DB_USER = os.getenv('NEON_DB_USER')
+NEON_DB_PASSWORD = os.getenv('NEON_DB_PASSWORD')
+NEON_DB_NAME = os.getenv('NEON_DB_NAME', 'neondb')
 
 
 class FileResponse(BaseModel):
@@ -29,17 +32,37 @@ class InstructionsResponse(BaseModel):
     instructions: str
 
 
+async def get_db_connection():
+    """Create and return a connection to the Neon database"""
+    if not all([NEON_DB_HOST, NEON_DB_USER, NEON_DB_PASSWORD]):
+        raise HTTPException(status_code=500, detail="Database configuration missing")
+
+    try:
+        conn = await asyncpg.connect(
+            host=NEON_DB_HOST,
+            port=int(NEON_DB_PORT),
+            user=NEON_DB_USER,
+            password=NEON_DB_PASSWORD,
+            database=NEON_DB_NAME,
+            ssl='require'
+        )
+        return conn
+    except Exception as e:
+        logger.error(f"Failed to connect to Neon database: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Database connection failed: {str(e)}")
+
+
 @router.get("/debug/config")
 async def debug_config():
     """
     Debug endpoint to check environment variable configuration
     """
     return {
-        "neon_api_url_set": bool(NEON_API_URL),
-        "neon_api_url_length": len(NEON_API_URL) if NEON_API_URL else 0,
-        "neon_api_key_set": bool(NEON_API_KEY),
-        "neon_api_key_length": len(NEON_API_KEY) if NEON_API_KEY else 0,
-        "neon_api_key_prefix": NEON_API_KEY[:10] + "..." if NEON_API_KEY and len(NEON_API_KEY) > 10 else "NOT_SET"
+        "neon_db_host_set": bool(NEON_DB_HOST),
+        "neon_db_user_set": bool(NEON_DB_USER),
+        "neon_db_password_set": bool(NEON_DB_PASSWORD),
+        "neon_db_name": NEON_DB_NAME,
+        "neon_db_port": NEON_DB_PORT
     }
 
 
@@ -54,55 +77,45 @@ async def get_user_files(user_id: str):
     Returns:
         FileResponse with list of unique files
     """
+    conn = None
     try:
-        if not NEON_API_URL or not NEON_API_KEY:
-            logger.error("NEON_API_URL or NEON_API_KEY is not configured")
-            raise HTTPException(status_code=500, detail="Database configuration missing")
+        # Connect to Neon database
+        conn = await get_db_connection()
 
-        # Query Neon database for files
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                f"{NEON_API_URL}/sql",
-                json={
-                    "query": """
-                        SELECT DISTINCT file_name, file_url, created_at
-                        FROM user_vector_knowledge_base
-                        WHERE user_id = $1
-                          AND source = 'file_upload'
-                          AND file_name IS NOT NULL
-                          AND file_url IS NOT NULL
-                        ORDER BY created_at DESC
-                    """,
-                    "params": [user_id]
-                },
-                headers={
-                    "Authorization": f"Bearer {NEON_API_KEY}",
-                    "Content-Type": "application/json"
-                }
-            )
+        # Query for files
+        query = """
+            SELECT DISTINCT file_name, file_url, created_at
+            FROM user_vector_knowledge_base
+            WHERE user_id = $1
+              AND source = 'file_upload'
+              AND file_name IS NOT NULL
+              AND file_url IS NOT NULL
+            ORDER BY created_at DESC
+        """
 
-            response.raise_for_status()
-            data = response.json()
+        rows = await conn.fetch(query, user_id)
 
         # Deduplicate by file_url (remove chunks of same file)
-        files = data.get('rows', [])
         unique_files_map = {}
-
-        for file in files:
-            file_url = file.get('file_url')
-            if file_url and file_url not in unique_files_map:
-                unique_files_map[file_url] = file
+        for row in rows:
+            file_url = row['file_url']
+            if file_url not in unique_files_map:
+                unique_files_map[file_url] = {
+                    'file_name': row['file_name'],
+                    'file_url': row['file_url'],
+                    'created_at': row['created_at'].isoformat() if row['created_at'] else None
+                }
 
         unique_files = list(unique_files_map.values())
 
         return FileResponse(success=True, files=unique_files)
 
-    except httpx.HTTPStatusError as e:
-        logger.error(f"HTTP error fetching user files from Neon: {e.response.text}")
-        raise HTTPException(status_code=500, detail=f"Failed to fetch files: {e.response.text}")
     except Exception as e:
         logger.error(f"Error fetching user files from Neon: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch files: {str(e)}")
+    finally:
+        if conn:
+            await conn.close()
 
 
 @router.get("/instructions/{user_id}", response_model=InstructionsResponse)
@@ -116,46 +129,32 @@ async def get_user_instructions(user_id: str):
     Returns:
         InstructionsResponse with combined instruction text
     """
+    conn = None
     try:
-        if not NEON_API_URL or not NEON_API_KEY:
-            logger.error("NEON_API_URL or NEON_API_KEY is not configured")
-            raise HTTPException(status_code=500, detail="Database configuration missing")
+        # Connect to Neon database
+        conn = await get_db_connection()
 
-        # Query Neon database for custom instructions
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                f"{NEON_API_URL}/sql",
-                json={
-                    "query": """
-                        SELECT document, created_at
-                        FROM user_vector_knowledge_base
-                        WHERE user_id = $1
-                          AND source = 'agent_settings'
-                          AND category = 'custom_instructions'
-                        ORDER BY created_at DESC
-                        LIMIT 10
-                    """,
-                    "params": [user_id]
-                },
-                headers={
-                    "Authorization": f"Bearer {NEON_API_KEY}",
-                    "Content-Type": "application/json"
-                }
-            )
+        # Query for custom instructions
+        query = """
+            SELECT document, created_at
+            FROM user_vector_knowledge_base
+            WHERE user_id = $1
+              AND source = 'agent_settings'
+              AND category = 'custom_instructions'
+            ORDER BY created_at DESC
+            LIMIT 10
+        """
 
-            response.raise_for_status()
-            data = response.json()
-
-        instructions = data.get('rows', [])
+        rows = await conn.fetch(query, user_id)
 
         # Combine all instruction chunks
-        combined_instructions = '\n\n'.join([item.get('document', '') for item in instructions])
+        combined_instructions = '\n\n'.join([row['document'] for row in rows if row['document']])
 
         return InstructionsResponse(success=True, instructions=combined_instructions)
 
-    except httpx.HTTPStatusError as e:
-        logger.error(f"HTTP error fetching custom instructions from Neon: {e.response.text}")
-        raise HTTPException(status_code=500, detail=f"Failed to fetch instructions: {e.response.text}")
     except Exception as e:
         logger.error(f"Error fetching custom instructions from Neon: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch instructions: {str(e)}")
+    finally:
+        if conn:
+            await conn.close()
