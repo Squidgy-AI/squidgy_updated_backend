@@ -2960,12 +2960,34 @@ async def analyze_website_content_with_ai(scraped_content: str, url: str) -> dic
 
         client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
-        # Check if content is minimal (less than 100 characters excluding the header)
-        content_without_header = scraped_content.replace("WEBSITE SCRAPING RESULTS", "").replace("="*80, "").strip()
+        # Strip out filler text to check actual content size
+        filler_patterns = [
+            "="*80,
+            "WEBSITE SCRAPING RESULTS",
+            "END OF SCRAPING RESULTS",
+            "-"*80,
+            "Total pages scraped:",
+            "URL:",
+            "Depth Level:",
+            "Status:",
+            "TITLE:",
+        ]
 
-        # If minimal content detected, use OpenRouter Web Search instead
-        if len(content_without_header) < 200 or "END OF SCRAPING RESULTS" in scraped_content and content_without_header.count('\n') < 10:
-            logger.warning(f"Minimal content detected for {url}, using OpenRouter Web Search")
+        actual_content = scraped_content
+        for pattern in filler_patterns:
+            actual_content = actual_content.replace(pattern, "")
+
+        # Remove extra whitespace and newlines
+        actual_content = "\n".join(line.strip() for line in actual_content.split("\n") if line.strip())
+
+        # Calculate actual content size in bytes
+        actual_content_bytes = len(actual_content.encode('utf-8'))
+
+        logger.info(f"Scraped content size: {len(scraped_content)} bytes, Actual content (excluding filler): {actual_content_bytes} bytes")
+
+        # If actual content is less than 500 bytes, use OpenRouter Web Search fallback
+        if actual_content_bytes < 500:
+            logger.warning(f"Minimal actual content detected ({actual_content_bytes} bytes < 500 bytes threshold) for {url}, using OpenRouter Web Search")
             from Website.web_analysis import openrouter_web_search_fallback
 
             # Use OpenRouter to get better content
@@ -2973,6 +2995,8 @@ async def analyze_website_content_with_ai(scraped_content: str, url: str) -> dic
             if fallback_result.get('status') != 'error' and fallback_result.get('content'):
                 scraped_content = fallback_result.get('content')
                 logger.info(f"Using OpenRouter Web Search content for analysis")
+            else:
+                logger.warning(f"OpenRouter fallback also failed, proceeding with minimal content")
 
         # Create AI prompt to extract structured information
         prompt = f"""Analyze the following website content and extract key business information.
