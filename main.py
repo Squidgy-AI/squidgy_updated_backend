@@ -3494,39 +3494,60 @@ Provide ONLY valid JSON, no additional text."""
             import traceback
             error_details = traceback.format_exc()
             logger.error(f"❌ FREE model failed: {str(e)}")
-            print(f"❌ FREE model failed: {str(e)}, trying fallback with test_openrouter_web_search.py...", flush=True)
+            print(f"❌ FREE model failed: {str(e)}, trying PAID model fallback...", flush=True)
 
-            # FALLBACK: Use OpenRouterWebSearch class from test_openrouter_web_search.py
+            # FALLBACK: Use PAID model directly with httpx (inline implementation)
             try:
-                from test_openrouter_web_search import OpenRouterWebSearch
+                logger.info(f"🔄 Falling back to PAID model (deepseek/deepseek-chat)")
+                print(f"🔄 Falling back to PAID model (deepseek/deepseek-chat)", flush=True)
 
-                logger.info(f"🔄 Falling back to OpenRouterWebSearch class with PAID model")
-                print(f"🔄 Falling back to OpenRouterWebSearch class with PAID model", flush=True)
+                # Call OpenRouter API with PAID model using httpx
+                async with httpx.AsyncClient() as http_client:
+                    fallback_response = await http_client.post(
+                        "https://openrouter.ai/api/v1/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                            "Content-Type": "application/json",
+                            "HTTP-Referer": "https://app.squidgy.ai",
+                            "X-Title": "Squidgy AI Website Analyzer"
+                        },
+                        json={
+                            "model": "deepseek/deepseek-chat",  # Paid but cheap ($0.14/1M tokens)
+                            "plugins": [{"id": "web", "engine": "native", "max_results": 5}],
+                            "messages": [{
+                                "role": "user",
+                                "content": analysis_prompt
+                            }],
+                            "temperature": 0.3,
+                            "max_tokens": 1500
+                        },
+                        timeout=20.0
+                    )
 
-                # Initialize the fallback client
-                fallback_client = OpenRouterWebSearch(OPENROUTER_API_KEY)
+                    fallback_response.raise_for_status()
+                    fallback_data = fallback_response.json()
 
-                # Use custom web plugin method with paid model
-                fallback_response = fallback_client.chat_with_custom_web_plugin(
-                    messages=[{
-                        "role": "user",
-                        "content": analysis_prompt
-                    }],
-                    model="deepseek/deepseek-chat",  # Paid but cheap ($0.14/1M tokens)
-                    engine="native",
-                    max_results=5
-                )
+                logger.info(f"✓ Fallback API returned 200 OK")
+                print(f"✓ Fallback API returned 200 OK", flush=True)
 
-                if "error" in fallback_response:
-                    raise Exception(f"Fallback API error: {fallback_response['error']}")
+                # Check response structure
+                if 'choices' not in fallback_data or len(fallback_data['choices']) == 0:
+                    raise Exception(f"Invalid fallback response structure: {fallback_data}")
 
-                ai_response = fallback_response['choices'][0]['message']['content'].strip()
-                logger.info(f"✓ OpenRouter Web Search completed (fallback class)")
-                print(f"✓ OpenRouter Web Search completed (fallback class)", flush=True)
+                ai_response = fallback_data['choices'][0]['message']['content'].strip()
+                response_length = len(ai_response)
+                logger.info(f"✓ OpenRouter Web Search completed (PAID model fallback), response length: {response_length}")
+                print(f"✓ OpenRouter Web Search completed (PAID model fallback), response length: {response_length}", flush=True)
+
+                # Check response size
+                if response_length > 10000:
+                    logger.warning(f"⚠️ Fallback response very large ({response_length} chars), truncating to 8000")
+                    ai_response = ai_response[:8000]
 
                 # Parse JSON from response
-                import json
-                import re
+                logger.info(f"🔍 Parsing JSON from fallback response...")
+                print(f"🔍 Parsing JSON from fallback response...", flush=True)
+
                 json_match = re.search(r'```json\s*(.*?)\s*```', ai_response, re.DOTALL)
                 if json_match:
                     json_str = json_match.group(1)
@@ -3537,9 +3558,12 @@ Provide ONLY valid JSON, no additional text."""
                     else:
                         json_str = ai_response
 
+                logger.info(f"🔍 Found JSON string from fallback, length: {len(json_str)}")
+                print(f"🔍 Found JSON string from fallback, length: {len(json_str)}, attempting to parse...", flush=True)
+
                 ai_extracted = json.loads(json_str)
-                logger.info(f"✓ AI analysis completed with fallback: {ai_extracted}")
-                print(f"✓ AI analysis completed with fallback: {ai_extracted}", flush=True)
+                logger.info(f"✓ AI analysis completed with PAID model fallback: {ai_extracted}")
+                print(f"✓ AI analysis completed with PAID model fallback: {ai_extracted}", flush=True)
 
                 # Set response_text for company_description
                 response_text = ai_extracted.get('company_description', f"AI-analyzed content for {request.url}")
@@ -3547,12 +3571,12 @@ Provide ONLY valid JSON, no additional text."""
             except Exception as fallback_error:
                 import traceback
                 fallback_details = traceback.format_exc()
-                logger.error(f"❌ Fallback class also failed: {str(fallback_error)}")
+                logger.error(f"❌ PAID model fallback also failed: {str(fallback_error)}")
                 logger.error(f"❌ Fallback Traceback:\n{fallback_details}")
-                print(f"❌ Both primary and fallback methods failed: {str(fallback_error)}", flush=True)
+                print(f"❌ Both FREE and PAID models failed: {str(fallback_error)}", flush=True)
                 return {
                     "status": "error",
-                    "message": f"Website analysis failed (both primary and fallback): {str(fallback_error)}"
+                    "message": f"Website analysis failed (both FREE and PAID models): {str(fallback_error)}"
                 }
         # ========== END ACTIVE SECTION ==========
 
