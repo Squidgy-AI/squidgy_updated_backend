@@ -3244,11 +3244,33 @@ async def website_analysis_complete_endpoint(
         logger.info(f"🌐 Using OpenRouter Web Search API for {request.url}")
         print(f"🌐 Using OpenRouter Web Search API for {request.url}", flush=True)
 
-        try:
-            import json
-            import re
+        # Analysis prompt template (used for both free and paid models)
+        # Define this BEFORE the try block so it's available in the fallback
+        import json
+        import re
 
-            # Use OpenRouter Web Search plugin directly via httpx
+        analysis_prompt = f"""Analyze the website at {request.url} and extract key business information.
+
+Please provide in JSON format:
+{{
+  "company_name": "The company or product name",
+  "company_description": "A comprehensive 8-10 sentence description covering: what the company does, their main products/services, who they serve, what makes them notable or unique in their space, their key features, target audience, competitive advantages, and business model",
+  "value_proposition": "A concise statement (1-2 sentences) explaining the unique value or benefit this company/product offers",
+  "business_niche": "The specific industry or market segment (e.g., 'E-commerce Platform', 'SaaS Analytics', 'Fintech')",
+  "tags": ["tag1", "tag2", "tag3", "tag4", "tag5"]
+}}
+
+Guidelines:
+- company_description should be detailed (8-10 complete sentences)
+- Focus on WHAT they offer and WHY it matters
+- Be specific about their market/industry
+- Use 3-5 relevant keywords as tags
+- If any field cannot be determined, use null
+
+Provide ONLY valid JSON, no additional text."""
+
+        try:
+            # Try FREE model first
             # See: https://openrouter.ai/docs/guides/features/plugins/web-search
             async with httpx.AsyncClient() as http_client:
                 response = await http_client.post(
@@ -3264,28 +3286,10 @@ async def website_analysis_complete_endpoint(
                         "plugins": [{"id": "web", "engine": "native", "max_results": 5}],
                         "messages": [{
                             "role": "user",
-                            "content": f"""Analyze the website at {request.url} and extract key business information.
-
-Please provide in JSON format:
-{{
-  "company_name": "The company or product name",
-  "company_description": "A comprehensive 4-5 sentence description covering: what the company does, their main products/services, who they serve, and what makes them notable or unique in their space",
-  "value_proposition": "A concise statement (1-2 sentences) explaining the unique value or benefit this company/product offers",
-  "business_niche": "The specific industry or market segment (e.g., 'E-commerce Platform', 'SaaS Analytics', 'Fintech')",
-  "tags": ["tag1", "tag2", "tag3", "tag4", "tag5"]
-}}
-
-Guidelines:
-- company_description should be detailed (4-5 complete sentences)
-- Focus on WHAT they offer and WHY it matters
-- Be specific about their market/industry
-- Use 3-5 relevant keywords as tags
-- If any field cannot be determined, use null
-
-Provide ONLY valid JSON, no additional text."""
+                            "content": analysis_prompt
                         }],
                         "temperature": 0.3,
-                        "max_tokens": 1000
+                        "max_tokens": 1500
                     },
                     timeout=60.0
                 )
@@ -3294,8 +3298,8 @@ Provide ONLY valid JSON, no additional text."""
                 data = response.json()
 
             ai_response = data['choices'][0]['message']['content'].strip()
-            logger.info(f"✓ OpenRouter Web Search completed")
-            print(f"✓ OpenRouter Web Search completed", flush=True)
+            logger.info(f"✓ OpenRouter Web Search completed (FREE model)")
+            print(f"✓ OpenRouter Web Search completed (FREE model)", flush=True)
 
             # Parse JSON from response
             json_match = re.search(r'```json\s*(.*?)\s*```', ai_response, re.DOTALL)
@@ -3318,13 +3322,67 @@ Provide ONLY valid JSON, no additional text."""
         except Exception as e:
             import traceback
             error_details = traceback.format_exc()
-            logger.error(f"❌ OpenRouter Web Search failed: {str(e)}")
-            logger.error(f"❌ Traceback:\n{error_details}")
-            print(f"❌ OpenRouter Web Search failed: {str(e)}", flush=True)
-            return {
-                "status": "error",
-                "message": f"Website analysis failed: {str(e)}"
-            }
+            logger.error(f"❌ FREE model failed: {str(e)}")
+            print(f"❌ FREE model failed: {str(e)}, trying fallback with test_openrouter_web_search.py...", flush=True)
+
+            # FALLBACK: Use OpenRouterWebSearch class from test_openrouter_web_search.py
+            try:
+                from test_openrouter_web_search import OpenRouterWebSearch
+
+                logger.info(f"🔄 Falling back to OpenRouterWebSearch class with PAID model")
+                print(f"🔄 Falling back to OpenRouterWebSearch class with PAID model", flush=True)
+
+                # Initialize the fallback client
+                fallback_client = OpenRouterWebSearch(OPENROUTER_API_KEY)
+
+                # Use custom web plugin method with paid model
+                fallback_response = fallback_client.chat_with_custom_web_plugin(
+                    messages=[{
+                        "role": "user",
+                        "content": analysis_prompt
+                    }],
+                    model="deepseek/deepseek-chat",  # Paid but cheap ($0.14/1M tokens)
+                    engine="native",
+                    max_results=5
+                )
+
+                if "error" in fallback_response:
+                    raise Exception(f"Fallback API error: {fallback_response['error']}")
+
+                ai_response = fallback_response['choices'][0]['message']['content'].strip()
+                logger.info(f"✓ OpenRouter Web Search completed (fallback class)")
+                print(f"✓ OpenRouter Web Search completed (fallback class)", flush=True)
+
+                # Parse JSON from response
+                import json
+                import re
+                json_match = re.search(r'```json\s*(.*?)\s*```', ai_response, re.DOTALL)
+                if json_match:
+                    json_str = json_match.group(1)
+                else:
+                    json_match = re.search(r'\{.*\}', ai_response, re.DOTALL)
+                    if json_match:
+                        json_str = json_match.group(0)
+                    else:
+                        json_str = ai_response
+
+                ai_extracted = json.loads(json_str)
+                logger.info(f"✓ AI analysis completed with fallback: {ai_extracted}")
+                print(f"✓ AI analysis completed with fallback: {ai_extracted}", flush=True)
+
+                # Set response_text for company_description
+                response_text = ai_extracted.get('company_description', f"AI-analyzed content for {request.url}")
+
+            except Exception as fallback_error:
+                import traceback
+                fallback_details = traceback.format_exc()
+                logger.error(f"❌ Fallback class also failed: {str(fallback_error)}")
+                logger.error(f"❌ Fallback Traceback:\n{fallback_details}")
+                print(f"❌ Both primary and fallback methods failed: {str(fallback_error)}", flush=True)
+                return {
+                    "status": "error",
+                    "message": f"Website analysis failed (both primary and fallback): {str(fallback_error)}"
+                }
         # ========== END ACTIVE SECTION ==========
 
         # Get extracted values from AI
