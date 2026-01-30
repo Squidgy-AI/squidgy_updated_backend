@@ -3480,16 +3480,18 @@ Provide ONLY valid JSON, no additional text."""
 
         logger.info(f"Analysis saved to database for {normalized_url}")
 
+        # TODO: Offload screenshot/favicon to BackgroundAutomationUser1 service to save memory
+        # DISABLED: Running Playwright locally exceeds Heroku 512MB RAM limit (causes R14 errors)
         # Schedule background task for screenshot and favicon capture
-        background_tasks.add_task(
-            capture_screenshot_and_favicon_background,
-            request.url,  # Use original URL for capture
-            request.firm_user_id,
-            request.agent_id,
-            firm_id
-        )
+        # background_tasks.add_task(
+        #     capture_screenshot_and_favicon_background,
+        #     request.url,  # Use original URL for capture
+        #     request.firm_user_id,
+        #     request.agent_id,
+        #     firm_id
+        # )
 
-        logger.info(f"Background task scheduled for screenshot/favicon capture")
+        logger.info(f"Screenshot/favicon capture disabled to prevent memory issues")
 
         # Return the latest record data
         if latest_record.data and len(latest_record.data) > 0:
