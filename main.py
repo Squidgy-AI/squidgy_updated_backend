@@ -3260,7 +3260,7 @@ async def website_analysis_complete_endpoint(
                         "X-Title": "Squidgy AI Website Analyzer"
                     },
                     json={
-                        "model": "deepseek/deepseek-chat",
+                        "model": "deepseek/deepseek-r1-0528:free",  # 100% FREE model with web search
                         "plugins": [{"id": "web", "engine": "native", "max_results": 5}],
                         "messages": [{
                             "role": "user",
