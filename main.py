@@ -2896,6 +2896,67 @@ async def website_analysis_endpoint(request: WebsiteAnalysisRequest):
 # WEBSITE ANALYSIS COMPLETE ENDPOINT (with background screenshot/favicon)
 # =============================================================================
 
+async def capture_screenshot_and_favicon_independent(
+    url: str,
+    firm_user_id: str,
+    agent_id: str,
+    firm_id: str
+):
+    """
+    INDEPENDENT task to capture screenshot and favicon - runs completely async.
+    This is fire-and-forget - doesn't block the API response.
+    Waits 2 seconds before starting to ensure response is sent first.
+    """
+    try:
+        # Wait 2 seconds to ensure the API response is sent to user first
+        await asyncio.sleep(2)
+
+        logger.info(f"[ASYNC CAPTURE] Starting independent capture for {url}")
+
+        # Run screenshot and favicon capture in parallel
+        screenshot_task = capture_website_screenshot(url, firm_user_id)
+        favicon_task = get_website_favicon_async(url, firm_user_id)
+
+        screenshot_result, favicon_result = await asyncio.gather(
+            screenshot_task,
+            favicon_task,
+            return_exceptions=True
+        )
+
+        # Prepare update data
+        update_data = {
+            'last_updated_timestamp': datetime.now(timezone.utc).isoformat()
+        }
+
+        # Add screenshot URL if successful
+        if isinstance(screenshot_result, dict) and screenshot_result.get('status') == 'success':
+            update_data['screenshot_url'] = screenshot_result.get('public_url')
+            logger.info(f"[ASYNC CAPTURE] Screenshot captured: {update_data['screenshot_url']}")
+        else:
+            logger.warning(f"[ASYNC CAPTURE] Screenshot capture failed: {screenshot_result}")
+
+        # Add favicon URL if successful
+        if isinstance(favicon_result, dict) and favicon_result.get('status') == 'success':
+            update_data['favicon_url'] = favicon_result.get('public_url')
+            logger.info(f"[ASYNC CAPTURE] Favicon captured: {update_data['favicon_url']}")
+        else:
+            logger.warning(f"[ASYNC CAPTURE] Favicon capture failed: {favicon_result}")
+
+        # Update the website_analysis record
+        if 'screenshot_url' in update_data or 'favicon_url' in update_data:
+            normalized_url = normalize_url(url)
+            supabase.table('website_analysis')\
+                .update(update_data)\
+                .eq('firm_user_id', firm_user_id)\
+                .eq('agent_id', agent_id)\
+                .eq('firm_id', firm_id)\
+                .execute()
+            logger.info(f"[ASYNC CAPTURE] Completed and database updated for {url}")
+
+    except Exception as e:
+        logger.error(f"[ASYNC CAPTURE] Error in independent capture: {str(e)}")
+
+
 async def capture_screenshot_and_favicon_background(
     url: str,
     firm_user_id: str,
@@ -2903,6 +2964,7 @@ async def capture_screenshot_and_favicon_background(
     firm_id: str
 ):
     """
+    DEPRECATED: Use capture_screenshot_and_favicon_independent() instead.
     Background task to capture screenshot and favicon, then update website_analysis table.
     Runs after analysis response is returned to user.
     """
@@ -3480,18 +3542,19 @@ Provide ONLY valid JSON, no additional text."""
 
         logger.info(f"Analysis saved to database for {normalized_url}")
 
-        # TODO: Offload screenshot/favicon to BackgroundAutomationUser1 service to save memory
-        # DISABLED: Running Playwright locally exceeds Heroku 512MB RAM limit (causes R14 errors)
-        # Schedule background task for screenshot and favicon capture
-        # background_tasks.add_task(
-        #     capture_screenshot_and_favicon_background,
-        #     request.url,  # Use original URL for capture
-        #     request.firm_user_id,
-        #     request.agent_id,
-        #     firm_id
-        # )
+        # Fire screenshot/favicon capture as COMPLETELY independent async task
+        # Uses asyncio.create_task() to run without blocking response
+        # This prevents memory buildup on main dyno during response
+        asyncio.create_task(
+            capture_screenshot_and_favicon_independent(
+                request.url,
+                request.firm_user_id,
+                request.agent_id,
+                firm_id
+            )
+        )
 
-        logger.info(f"Screenshot/favicon capture disabled to prevent memory issues")
+        logger.info(f"Screenshot/favicon fired independently - not blocking response")
 
         # Return the latest record data
         if latest_record.data and len(latest_record.data) > 0:
