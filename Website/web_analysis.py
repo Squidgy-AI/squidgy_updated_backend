@@ -201,16 +201,12 @@ class WebScraper:
                 'links': links
             }
         except httpx.HTTPStatusError as e:
-            # HTTP error - use fallback
-            logger.warning(f"HTTP error fetching {url}: {str(e)} - using OpenRouter Web Search fallback")
-            return openrouter_web_search_fallback(url)
-        except Exception as e:
-            # Other errors (network, timeout, etc.) - also try fallback
-            logger.warning(f"Error fetching {url}: {str(e)} - trying OpenRouter Web Search fallback")
-            fallback_result = openrouter_web_search_fallback(url)
-            # If fallback also fails, return original error
-            if fallback_result['status'] == 'error':
-                logger.error(f"Both scraping and fallback failed for {url}")
+            # HTTP error - only use fallback for main page (depth 0), skip subpages
+            if depth == 0:
+                logger.warning(f"HTTP error fetching {url}: {str(e)} - using OpenRouter Web Search fallback")
+                return openrouter_web_search_fallback(url)
+            else:
+                logger.warning(f"HTTP error fetching {url} (depth {depth}): {str(e)} - skipping subpage")
                 return {
                     'url': url,
                     'depth': depth,
@@ -219,7 +215,34 @@ class WebScraper:
                     'error': str(e),
                     'links': set()
                 }
-            return fallback_result
+        except Exception as e:
+            # Other errors (network, timeout, etc.) - only use fallback for main page
+            if depth == 0:
+                logger.warning(f"Error fetching {url}: {str(e)} - trying OpenRouter Web Search fallback")
+                fallback_result = openrouter_web_search_fallback(url)
+                # If fallback also fails, return original error
+                if fallback_result['status'] == 'error':
+                    logger.error(f"Both scraping and fallback failed for {url}")
+                    return {
+                        'url': url,
+                        'depth': depth,
+                        'content': '',
+                        'status': 'error',
+                        'error': str(e),
+                        'links': set()
+                    }
+                return fallback_result
+            else:
+                logger.warning(f"Error fetching {url} (depth {depth}): {str(e)} - skipping subpage")
+                return {
+                    'url': url,
+                    'depth': depth,
+                    'content': '',
+                    'status': 'error',
+                    'error': str(e),
+                    'links': set()
+                }
+
 
     def scrape(self, start_url: str) -> Dict[str, Any]:
         """Scrape website with concurrent requests up to max_depth"""
