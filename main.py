@@ -514,7 +514,16 @@ class ConversationalHandler:
 load_dotenv()
 # Initialize FastAPI app
 app = FastAPI()
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(levelname)s: %(message)s',
+    force=True
+)
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
 import threading
 
 # Thread-safe global variables with locks
@@ -2955,14 +2964,35 @@ async def analyze_website_content_with_ai(scraped_content: str, url: str) -> dic
     Returns:
         dict with extracted fields: company_name, value_proposition, business_niche, tags
     """
+    logger.info(f"🤖 analyze_website_content_with_ai() CALLED for {url}")
+    print(f"\n🤖 analyze_website_content_with_ai() CALLED for {url}", flush=True)
+
+    # Check if API key is set
+    if not OPENROUTER_API_KEY:
+        logger.error(f"❌ OPENROUTER_API_KEY is not set!")
+        print(f"❌ OPENROUTER_API_KEY is not set!", flush=True)
+        return {
+            "company_name": None,
+            "value_proposition": None,
+            "business_niche": None,
+            "tags": None
+        }
+
+    logger.info(f"✓ API key is set (length: {len(OPENROUTER_API_KEY)})")
+    print(f"✓ API key is set (length: {len(OPENROUTER_API_KEY)})", flush=True)
+
     try:
         from openai import AsyncOpenAI
+        logger.info("✓ Imported AsyncOpenAI")
+        print("✓ Imported AsyncOpenAI", flush=True)
 
         # Use OpenRouter API (compatible with OpenAI SDK)
         client = AsyncOpenAI(
             base_url="https://openrouter.ai/api/v1",
             api_key=OPENROUTER_API_KEY
         )
+        logger.info("✓ Created OpenRouter client")
+        print(f"✓ Created OpenRouter client", flush=True)
 
         # Strip out filler text to check actual content size
         filler_patterns = [
@@ -2987,10 +3017,13 @@ async def analyze_website_content_with_ai(scraped_content: str, url: str) -> dic
         # Calculate actual content size in bytes
         actual_content_bytes = len(actual_content.encode('utf-8'))
 
-        logger.info(f"Scraped content size: {len(scraped_content)} bytes, Actual content (excluding filler): {actual_content_bytes} bytes")
+        logger.info(f"📊 Content size: {len(scraped_content)} bytes total, {actual_content_bytes} bytes actual content")
+        print(f"📊 Content size: {len(scraped_content)} bytes total, {actual_content_bytes} bytes actual content", flush=True)
 
         # If actual content is less than 500 bytes, use OpenRouter Web Search fallback
         if actual_content_bytes < 500:
+            logger.warning(f"⚠️ Minimal content ({actual_content_bytes} < 500), triggering OpenRouter fallback")
+            print(f"⚠️ Minimal content ({actual_content_bytes} < 500), triggering OpenRouter fallback", flush=True)
             logger.warning(f"Minimal actual content detected ({actual_content_bytes} bytes < 500 bytes threshold) for {url}, using OpenRouter Web Search")
             from Website.web_analysis import openrouter_web_search_fallback
 
@@ -2998,11 +3031,16 @@ async def analyze_website_content_with_ai(scraped_content: str, url: str) -> dic
             fallback_result = openrouter_web_search_fallback(url)
             if fallback_result.get('status') != 'error' and fallback_result.get('content'):
                 scraped_content = fallback_result.get('content')
-                logger.info(f"Using OpenRouter Web Search content for analysis")
+                logger.info(f"✓ Using OpenRouter Web Search content for analysis")
+                print(f"✓ Using OpenRouter Web Search content for analysis", flush=True)
             else:
-                logger.warning(f"OpenRouter fallback also failed, proceeding with minimal content")
+                logger.warning(f"⚠️ OpenRouter fallback also failed, proceeding with minimal content")
+                print(f"⚠️ OpenRouter fallback also failed, proceeding with minimal content", flush=True)
 
         # Create AI prompt to extract structured information
+        logger.info(f"📄 Content preview (first 300 chars): {scraped_content[:300]}...")
+        print(f"📄 Content preview (first 300 chars): {scraped_content[:300]}...", flush=True)
+
         prompt = f"""Analyze the following website content and extract key business information.
 
 Website URL: {url}
@@ -3027,6 +3065,9 @@ Guidelines:
 Provide ONLY the JSON response, no additional text."""
 
         # Call OpenRouter API
+        logger.info(f"🌐 Calling OpenRouter API with model: deepseek/deepseek-chat")
+        print(f"🌐 Calling OpenRouter API with model: deepseek/deepseek-chat", flush=True)
+
         response = await client.chat.completions.create(
             extra_headers={
                 "HTTP-Referer": "https://app.squidgy.ai",
@@ -3041,34 +3082,55 @@ Provide ONLY the JSON response, no additional text."""
             max_tokens=500
         )
 
+        logger.info(f"✓ OpenRouter API call completed")
+        print(f"✓ OpenRouter API call completed", flush=True)
+
         # Parse the AI response
         ai_response = response.choices[0].message.content.strip()
-        logger.info(f"AI analysis response: {ai_response}")
+        logger.info(f"📝 AI response (first 200 chars): {ai_response[:200]}...")
+        print(f"📝 AI response (first 200 chars): {ai_response[:200]}...", flush=True)
 
         # Extract JSON from response (handle cases where AI adds markdown code blocks)
         import json
         import re
 
         # Try to find JSON in the response
+        logger.info(f"🔍 Extracting JSON from AI response")
+        print(f"🔍 Extracting JSON from AI response", flush=True)
+
         json_match = re.search(r'```json\s*(.*?)\s*```', ai_response, re.DOTALL)
         if json_match:
             json_str = json_match.group(1)
+            logger.info(f"✓ Found JSON in markdown code block")
+            print(f"✓ Found JSON in markdown code block", flush=True)
         else:
             # Try to find JSON without code blocks
             json_match = re.search(r'\{.*\}', ai_response, re.DOTALL)
             if json_match:
                 json_str = json_match.group(0)
+                logger.info(f"✓ Found JSON without code block")
+                print(f"✓ Found JSON without code block", flush=True)
             else:
                 json_str = ai_response
+                logger.info(f"⚠️ No JSON pattern found, using raw response")
+                print(f"⚠️ No JSON pattern found, using raw response", flush=True)
 
         # Parse JSON
+        logger.info(f"📦 Parsing JSON string (length: {len(json_str)} chars)")
+        print(f"📦 Parsing JSON string (length: {len(json_str)} chars)", flush=True)
         extracted_data = json.loads(json_str)
 
-        logger.info(f"Extracted data: {extracted_data}")
+        logger.info(f"✅ Successfully extracted data: {extracted_data}")
+        print(f"✅ Successfully extracted data: {extracted_data}", flush=True)
         return extracted_data
 
     except Exception as e:
-        logger.error(f"Error in AI analysis: {str(e)}")
+        import traceback
+        error_details = traceback.format_exc()
+        logger.error(f"❌ Error in AI analysis: {str(e)}")
+        logger.error(f"❌ Full traceback:\n{error_details}")
+        print(f"\n❌ ERROR in AI analysis: {str(e)}", flush=True)
+        print(f"❌ Full traceback:\n{error_details}", flush=True)
         # Return empty structure on error
         return {
             "company_name": None,
@@ -3148,12 +3210,16 @@ async def website_analysis_complete_endpoint(
             }
 
         # CASE 2: No exact match -> run fresh analysis and INSERT new record
-        logger.info(f"Running fresh analysis for {normalized_url}")
+        logger.info(f"🔍 CASE 2: Running fresh analysis for {normalized_url}")
+        print(f"\n🔍 CASE 2: Running fresh analysis for {normalized_url}", flush=True)
 
         # Use local web scraping instead of external endpoint
         analysis_result = analyze_website_local(request.url, max_depth=1, max_pages=10)
+        logger.info(f"✓ Scraping completed, success={analysis_result['success']}")
+        print(f"✓ Scraping completed, success={analysis_result['success']}", flush=True)
 
         if not analysis_result['success']:
+            print(f"❌ Analysis failed: {analysis_result.get('error')}")
             return {
                 "status": "error",
                 "message": f"Website analysis failed: {analysis_result.get('error', 'Unknown error')}"
@@ -3162,10 +3228,15 @@ async def website_analysis_complete_endpoint(
         # Parse the analysis response
         analysis_data = analysis_result.get('data', {})
         response_text = analysis_data.get('response_text', '')
+        logger.info(f"✓ Got response_text, length={len(response_text)} bytes")
+        print(f"✓ Got response_text, length={len(response_text)} bytes", flush=True)
 
         # Use AI to extract structured information from scraped content
-        logger.info(f"Running AI analysis on scraped content for {normalized_url}")
+        logger.info(f"🤖 Starting AI analysis on scraped content for {normalized_url}")
+        print(f"🤖 Starting AI analysis for {normalized_url}", flush=True)
         ai_extracted = await analyze_website_content_with_ai(response_text, request.url)
+        logger.info(f"✓ AI analysis completed: {ai_extracted}")
+        print(f"✓ AI analysis completed: {ai_extracted}", flush=True)
 
         # Get extracted values from AI (with fallback to basic extraction)
         company_name = ai_extracted.get('company_name')
