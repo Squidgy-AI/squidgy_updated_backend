@@ -134,20 +134,36 @@ async def get_user_instructions(user_id: str):
         # Connect to Neon database
         conn = await get_db_connection()
 
-        # Query for custom instructions
-        query = """
-            SELECT document, created_at
+        # First, get the most recent created_at timestamp
+        timestamp_query = """
+            SELECT MAX(created_at) as latest_timestamp
             FROM user_vector_knowledge_base
             WHERE user_id = $1
               AND source = 'agent_settings'
               AND category = 'custom_instructions'
-            ORDER BY created_at DESC
-            LIMIT 10
         """
 
-        rows = await conn.fetch(query, user_id)
+        timestamp_result = await conn.fetchrow(timestamp_query, user_id)
+        latest_timestamp = timestamp_result['latest_timestamp'] if timestamp_result else None
 
-        # Combine all instruction chunks
+        if not latest_timestamp:
+            # No custom instructions found
+            return InstructionsResponse(success=True, instructions='')
+
+        # Get all chunks from the most recent save operation
+        query = """
+            SELECT document
+            FROM user_vector_knowledge_base
+            WHERE user_id = $1
+              AND source = 'agent_settings'
+              AND category = 'custom_instructions'
+              AND created_at = $2
+            ORDER BY id ASC
+        """
+
+        rows = await conn.fetch(query, user_id, latest_timestamp)
+
+        # Combine chunks from the most recent save only
         combined_instructions = '\n\n'.join([row['document'] for row in rows if row['document']])
 
         return InstructionsResponse(success=True, instructions=combined_instructions)
