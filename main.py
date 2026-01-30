@@ -2896,6 +2896,94 @@ async def website_analysis_endpoint(request: WebsiteAnalysisRequest):
 # WEBSITE ANALYSIS COMPLETE ENDPOINT (with background screenshot/favicon)
 # =============================================================================
 
+async def capture_screenshot_independent(
+    url: str,
+    firm_user_id: str,
+    agent_id: str,
+    firm_id: str
+):
+    """
+    INDEPENDENT task to capture ONLY screenshot - runs completely async.
+    Updates website_analysis table with screenshot_url.
+    Fire-and-forget - doesn't block the API response.
+    """
+    try:
+        # Wait 2 seconds to ensure the API response is sent to user first
+        await asyncio.sleep(2)
+
+        logger.info(f"[ASYNC SCREENSHOT] Starting independent screenshot capture for {url}")
+
+        # Capture screenshot
+        screenshot_result = await capture_website_screenshot(url, firm_user_id)
+
+        # Update database if successful
+        if isinstance(screenshot_result, dict) and screenshot_result.get('status') == 'success':
+            screenshot_url = screenshot_result.get('public_url')
+            normalized_url = normalize_url(url)
+
+            # Update the website_analysis record
+            supabase.table('website_analysis')\
+                .update({
+                    'screenshot_url': screenshot_url,
+                    'last_updated_timestamp': datetime.now(timezone.utc).isoformat()
+                })\
+                .eq('firm_user_id', firm_user_id)\
+                .eq('agent_id', agent_id)\
+                .eq('firm_id', firm_id)\
+                .execute()
+
+            logger.info(f"[ASYNC SCREENSHOT] ✓ Screenshot saved: {screenshot_url}")
+        else:
+            logger.warning(f"[ASYNC SCREENSHOT] ✗ Screenshot capture failed: {screenshot_result}")
+
+    except Exception as e:
+        logger.error(f"[ASYNC SCREENSHOT] Error: {str(e)}")
+
+
+async def capture_favicon_independent(
+    url: str,
+    firm_user_id: str,
+    agent_id: str,
+    firm_id: str
+):
+    """
+    INDEPENDENT task to capture ONLY favicon - runs completely async.
+    Updates website_analysis table with favicon_url.
+    Fire-and-forget - doesn't block the API response.
+    """
+    try:
+        # Wait 3 seconds (slightly offset from screenshot to avoid resource contention)
+        await asyncio.sleep(3)
+
+        logger.info(f"[ASYNC FAVICON] Starting independent favicon capture for {url}")
+
+        # Capture favicon
+        favicon_result = await get_website_favicon_async(url, firm_user_id)
+
+        # Update database if successful
+        if isinstance(favicon_result, dict) and favicon_result.get('status') == 'success':
+            favicon_url = favicon_result.get('public_url')
+            normalized_url = normalize_url(url)
+
+            # Update the website_analysis record
+            supabase.table('website_analysis')\
+                .update({
+                    'favicon_url': favicon_url,
+                    'last_updated_timestamp': datetime.now(timezone.utc).isoformat()
+                })\
+                .eq('firm_user_id', firm_user_id)\
+                .eq('agent_id', agent_id)\
+                .eq('firm_id', firm_id)\
+                .execute()
+
+            logger.info(f"[ASYNC FAVICON] ✓ Favicon saved: {favicon_url}")
+        else:
+            logger.warning(f"[ASYNC FAVICON] ✗ Favicon capture failed: {favicon_result}")
+
+    except Exception as e:
+        logger.error(f"[ASYNC FAVICON] Error: {str(e)}")
+
+
 async def capture_screenshot_and_favicon_independent(
     url: str,
     firm_user_id: str,
@@ -2903,6 +2991,8 @@ async def capture_screenshot_and_favicon_independent(
     firm_id: str
 ):
     """
+    DEPRECATED: Use capture_screenshot_independent() and capture_favicon_independent() separately.
+
     INDEPENDENT task to capture screenshot and favicon - runs completely async.
     This is fire-and-forget - doesn't block the API response.
     Waits 2 seconds before starting to ensure response is sent first.
@@ -3542,11 +3632,14 @@ Provide ONLY valid JSON, no additional text."""
 
         logger.info(f"Analysis saved to database for {normalized_url}")
 
-        # Fire screenshot/favicon capture as COMPLETELY independent async task
+        # Fire screenshot and favicon as TWO COMPLETELY SEPARATE independent async tasks
+        # They run independently from each other - one failure won't affect the other
         # Uses asyncio.create_task() to run without blocking response
-        # This prevents memory buildup on main dyno during response
+        # Screenshot starts after 2s, favicon after 3s (slightly offset)
+
+        # Task 1: Screenshot capture
         asyncio.create_task(
-            capture_screenshot_and_favicon_independent(
+            capture_screenshot_independent(
                 request.url,
                 request.firm_user_id,
                 request.agent_id,
@@ -3554,7 +3647,17 @@ Provide ONLY valid JSON, no additional text."""
             )
         )
 
-        logger.info(f"Screenshot/favicon fired independently - not blocking response")
+        # Task 2: Favicon capture
+        asyncio.create_task(
+            capture_favicon_independent(
+                request.url,
+                request.firm_user_id,
+                request.agent_id,
+                firm_id
+            )
+        )
+
+        logger.info(f"Screenshot and favicon fired as 2 independent tasks - not blocking response")
 
         # Return the latest record data
         if latest_record.data and len(latest_record.data) > 0:
