@@ -10,6 +10,85 @@ from typing import Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
+# OpenRouter configuration
+OPENROUTER_API_KEY = "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"
+OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
+OPENROUTER_MODEL = "deepseek/deepseek-r1-0528:free"  # Free model
+
+
+def openrouter_web_search_fallback(url: str) -> Dict[str, Any]:
+    """
+    Fallback to OpenRouter Web Search when direct scraping fails (403, etc.)
+
+    Args:
+        url: The website URL to analyze
+
+    Returns:
+        Dict with content formatted like scraper output
+    """
+    try:
+        logger.info(f"Using OpenRouter Web Search fallback for {url}")
+
+        response = httpx.post(
+            OPENROUTER_API_URL,
+            headers={
+                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": OPENROUTER_MODEL,
+                "plugins": [{"id": "web", "engine": "native", "max_results": 5}],
+                "messages": [{
+                    "role": "user",
+                    "content": f"""Analyze this website: {url}
+
+Please provide:
+1. Website/Company Title
+2. Main headings and sections
+3. Company description and what they do
+4. Value proposition
+5. Business niche/industry
+6. Key services or products
+
+Format your response with clear headings and paragraphs."""
+                }]
+            },
+            timeout=30.0
+        )
+
+        response.raise_for_status()
+        data = response.json()
+
+        # Extract the AI response
+        ai_content = data.get('choices', [{}])[0].get('message', {}).get('content', '')
+
+        if not ai_content:
+            raise Exception("No content returned from OpenRouter")
+
+        # Format response to match scraper output
+        formatted_content = f"TITLE: Analysis via Web Search\n\n{ai_content}"
+
+        logger.info(f"OpenRouter Web Search successful for {url}")
+
+        return {
+            'url': url,
+            'depth': 0,
+            'content': formatted_content,
+            'status': 'web_search_fallback',
+            'links': set()
+        }
+
+    except Exception as e:
+        logger.error(f"OpenRouter Web Search fallback failed for {url}: {str(e)}")
+        return {
+            'url': url,
+            'depth': 0,
+            'content': '',
+            'status': 'error',
+            'error': f"Web search fallback failed: {str(e)}",
+            'links': set()
+        }
+
 
 class WebScraper:
     """Web scraper for extracting content from websites"""
@@ -92,6 +171,12 @@ class WebScraper:
 
             fetch_start = time.time()
             response = self.session.get(url)
+
+            # Check for 403 or other client/server errors - trigger fallback
+            if response.status_code >= 400:
+                logger.warning(f"HTTP {response.status_code} for {url} - using OpenRouter Web Search fallback")
+                return openrouter_web_search_fallback(url)
+
             response.raise_for_status()
             fetch_time = time.time() - fetch_start
 
@@ -111,16 +196,26 @@ class WebScraper:
                 'status': response.status_code,
                 'links': links
             }
+        except httpx.HTTPStatusError as e:
+            # HTTP error - use fallback
+            logger.warning(f"HTTP error fetching {url}: {str(e)} - using OpenRouter Web Search fallback")
+            return openrouter_web_search_fallback(url)
         except Exception as e:
-            logger.error(f"Error fetching {url}: {str(e)}")
-            return {
-                'url': url,
-                'depth': depth,
-                'content': '',
-                'status': 'error',
-                'error': str(e),
-                'links': set()
-            }
+            # Other errors (network, timeout, etc.) - also try fallback
+            logger.warning(f"Error fetching {url}: {str(e)} - trying OpenRouter Web Search fallback")
+            fallback_result = openrouter_web_search_fallback(url)
+            # If fallback also fails, return original error
+            if fallback_result['status'] == 'error':
+                logger.error(f"Both scraping and fallback failed for {url}")
+                return {
+                    'url': url,
+                    'depth': depth,
+                    'content': '',
+                    'status': 'error',
+                    'error': str(e),
+                    'links': set()
+                }
+            return fallback_result
 
     def scrape(self, start_url: str) -> Dict[str, Any]:
         """Scrape website with concurrent requests up to max_depth"""
