@@ -3213,43 +3213,133 @@ async def website_analysis_complete_endpoint(
         logger.info(f"🔍 CASE 2: Running fresh analysis for {normalized_url}")
         print(f"\n🔍 CASE 2: Running fresh analysis for {normalized_url}", flush=True)
 
-        # Use local web scraping instead of external endpoint
-        analysis_result = analyze_website_local(request.url, max_depth=1, max_pages=10)
-        logger.info(f"✓ Scraping completed, success={analysis_result['success']}")
-        print(f"✓ Scraping completed, success={analysis_result['success']}", flush=True)
+        # ========== COMMENTED OUT: Local web scraping (causes memory/stability issues on Heroku) ==========
+        # # Use local web scraping instead of external endpoint
+        # analysis_result = analyze_website_local(request.url, max_depth=1, max_pages=10)
+        # logger.info(f"✓ Scraping completed, success={analysis_result['success']}")
+        # print(f"✓ Scraping completed, success={analysis_result['success']}", flush=True)
+        #
+        # if not analysis_result['success']:
+        #     print(f"❌ Analysis failed: {analysis_result.get('error')}")
+        #     return {
+        #         "status": "error",
+        #         "message": f"Website analysis failed: {analysis_result.get('error', 'Unknown error')}"
+        #     }
+        #
+        # # Parse the analysis response
+        # analysis_data = analysis_result.get('data', {})
+        # response_text = analysis_data.get('response_text', '')
+        # logger.info(f"✓ Got response_text, length={len(response_text)} bytes")
+        # print(f"✓ Got response_text, length={len(response_text)} bytes", flush=True)
+        #
+        # # Use AI to extract structured information from scraped content
+        # logger.info(f"🤖 Starting AI analysis on scraped content for {normalized_url}")
+        # print(f"🤖 Starting AI analysis for {normalized_url}", flush=True)
+        # ai_extracted = await analyze_website_content_with_ai(response_text, request.url)
+        # logger.info(f"✓ AI analysis completed: {ai_extracted}")
+        # print(f"✓ AI analysis completed: {ai_extracted}", flush=True)
+        # ========== END COMMENTED OUT SECTION ==========
 
-        if not analysis_result['success']:
-            print(f"❌ Analysis failed: {analysis_result.get('error')}")
+        # ========== ACTIVE: Use OpenRouter Web Search API directly (more reliable, less memory) ==========
+        logger.info(f"🌐 Using OpenRouter Web Search API for {request.url}")
+        print(f"🌐 Using OpenRouter Web Search API for {request.url}", flush=True)
+
+        try:
+            import json
+            import re
+
+            # Use OpenRouter Web Search plugin directly via httpx
+            # See: https://openrouter.ai/docs/guides/features/plugins/web-search
+            async with httpx.AsyncClient() as http_client:
+                response = await http_client.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                        "Content-Type": "application/json",
+                        "HTTP-Referer": "https://app.squidgy.ai",
+                        "X-Title": "Squidgy AI Website Analyzer"
+                    },
+                    json={
+                        "model": "deepseek/deepseek-chat",
+                        "plugins": [{"id": "web", "engine": "native", "max_results": 5}],
+                        "messages": [{
+                            "role": "user",
+                            "content": f"""Analyze the website at {request.url} and extract key business information.
+
+Please provide in JSON format:
+{{
+  "company_name": "The company or product name",
+  "company_description": "A brief 2-3 sentence description of what the company does",
+  "value_proposition": "A concise statement (1-2 sentences) explaining the unique value or benefit this company/product offers",
+  "business_niche": "The specific industry or market segment (e.g., 'E-commerce Platform', 'SaaS Analytics', 'Fintech')",
+  "tags": ["tag1", "tag2", "tag3", "tag4", "tag5"]
+}}
+
+Guidelines:
+- Focus on WHAT they offer and WHY it matters
+- Be specific about their market/industry
+- Use 3-5 relevant keywords as tags
+- If any field cannot be determined, use null
+
+Provide ONLY valid JSON, no additional text."""
+                        }],
+                        "temperature": 0.3,
+                        "max_tokens": 1000
+                    },
+                    timeout=60.0
+                )
+
+                response.raise_for_status()
+                data = response.json()
+
+            ai_response = data['choices'][0]['message']['content'].strip()
+            logger.info(f"✓ OpenRouter Web Search completed")
+            print(f"✓ OpenRouter Web Search completed", flush=True)
+
+            # Parse JSON from response
+            json_match = re.search(r'```json\s*(.*?)\s*```', ai_response, re.DOTALL)
+            if json_match:
+                json_str = json_match.group(1)
+            else:
+                json_match = re.search(r'\{.*\}', ai_response, re.DOTALL)
+                if json_match:
+                    json_str = json_match.group(0)
+                else:
+                    json_str = ai_response
+
+            ai_extracted = json.loads(json_str)
+            logger.info(f"✓ AI analysis completed: {ai_extracted}")
+            print(f"✓ AI analysis completed: {ai_extracted}", flush=True)
+
+            # Set response_text for company_description
+            response_text = ai_extracted.get('company_description', f"AI-analyzed content for {request.url}")
+
+        except Exception as e:
+            import traceback
+            error_details = traceback.format_exc()
+            logger.error(f"❌ OpenRouter Web Search failed: {str(e)}")
+            logger.error(f"❌ Traceback:\n{error_details}")
+            print(f"❌ OpenRouter Web Search failed: {str(e)}", flush=True)
             return {
                 "status": "error",
-                "message": f"Website analysis failed: {analysis_result.get('error', 'Unknown error')}"
+                "message": f"Website analysis failed: {str(e)}"
             }
+        # ========== END ACTIVE SECTION ==========
 
-        # Parse the analysis response
-        analysis_data = analysis_result.get('data', {})
-        response_text = analysis_data.get('response_text', '')
-        logger.info(f"✓ Got response_text, length={len(response_text)} bytes")
-        print(f"✓ Got response_text, length={len(response_text)} bytes", flush=True)
-
-        # Use AI to extract structured information from scraped content
-        logger.info(f"🤖 Starting AI analysis on scraped content for {normalized_url}")
-        print(f"🤖 Starting AI analysis for {normalized_url}", flush=True)
-        ai_extracted = await analyze_website_content_with_ai(response_text, request.url)
-        logger.info(f"✓ AI analysis completed: {ai_extracted}")
-        print(f"✓ AI analysis completed: {ai_extracted}", flush=True)
-
-        # Get extracted values from AI (with fallback to basic extraction)
+        # Get extracted values from AI
         company_name = ai_extracted.get('company_name')
         value_proposition = ai_extracted.get('value_proposition')
         business_niche = ai_extracted.get('business_niche')
         tags = ai_extracted.get('tags')
 
-        # Fallback: Extract company name from title if AI didn't find it
-        if not company_name and 'TITLE:' in response_text:
-            title_start = response_text.find('TITLE:') + 6
-            title_end = response_text.find('\n', title_start)
-            if title_end > title_start:
-                company_name = response_text[title_start:title_end].strip()
+        # Fallback: Extract company name from domain if AI didn't find it
+        if not company_name:
+            from urllib.parse import urlparse
+            parsed_url = urlparse(request.url)
+            domain_parts = parsed_url.netloc.split('.')
+            # Get the main domain part (e.g., "tesla" from "www.tesla.com")
+            company_name = domain_parts[-2] if len(domain_parts) >= 2 else domain_parts[0]
+            company_name = company_name.capitalize()
 
         # Extract domain from URL
         from urllib.parse import urlparse
