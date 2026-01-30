@@ -7448,6 +7448,18 @@ except Exception as e:
     logger.error(f"Error loading GHL Media routes: {e}")
 
 # ============================================================================
+# KNOWLEDGE BASE ROUTES
+# ============================================================================
+try:
+    from routes.knowledge_base import router as knowledge_base_router
+    app.include_router(knowledge_base_router)
+    logger.info("Knowledge Base routes loaded successfully")
+except ImportError as e:
+    logger.warning(f"Knowledge Base routes not available: {e}")
+except Exception as e:
+    logger.error(f"Error loading Knowledge Base routes: {e}")
+
+# ============================================================================
 # MCP (Model Context Protocol) INTEGRATION
 # ============================================================================
 
