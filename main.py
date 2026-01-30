@@ -7498,122 +7498,98 @@ async def scrape_website_endpoint(request: WebScrapeRequest):
 # ============================================================================
 
 # ============================================================================
-# GHL OAUTH AUTOMATION ENDPOINTS
+# SUPABASE QUERY ENDPOINT
 # ============================================================================
 
-@app.post("/api/ghl/oauth/facebook/get-url")
-async def get_facebook_oauth_url(request: Request):
+@app.post("/api/supabase/query")
+async def supabase_query(request: Request):
     """
-    Automate admin login to GHL and capture Facebook OAuth URL for a location
-    
-    Request body:
-    {
-        "location_id": "string",
-        "user_id": "string"
-    }
-    """
-    try:
-        body = await request.json()
-        location_id = body.get('location_id')
-        user_id = body.get('user_id')
-        
-        if not location_id:
-            raise HTTPException(status_code=400, detail="location_id is required")
-        
-        print(f"[OAUTH AUTOMATION] 🚀 Getting Facebook OAuth URL for location: {location_id}")
-        
-        # Get the automation instance
-        automation = get_oauth_automation()
-        
-        # Run the automation to get OAuth URL
-        result = await automation.get_facebook_oauth_url(location_id)
-        
-        if result['success']:
-            # If we have user_id, append it to the OAuth URL
-            if user_id and result['oauth_url']:
-                separator = '&' if '?' in result['oauth_url'] else '?'
-                result['oauth_url'] = f"{result['oauth_url']}{separator}userId={user_id}"
-            
-            print(f"[OAUTH AUTOMATION] ✅ Successfully retrieved OAuth URL")
-            return result
-        else:
-            print(f"[OAUTH AUTOMATION] ❌ Failed to get OAuth URL: {result['message']}")
-            raise HTTPException(status_code=500, detail=result['message'])
-            
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error in OAuth automation: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/api/social/facebook/start-oauth")
-async def start_facebook_social_oauth(request: Request):
-    """
-    Start Facebook OAuth for Social Media Posting integration
+    Generic Supabase query endpoint
 
     Request body:
     {
-        "firm_user_id": "string",
-        "agent_id": "string"
-    }
-
-    Returns:
-    {
-        "success": true,
-        "oauth_url": "https://..."
-    }
-    """
-    try:
-        body = await request.json()
-        firm_user_id = body.get('firm_user_id')
-        agent_id = body.get('agent_id', 'SOL')
-
-        if not firm_user_id:
-            raise HTTPException(status_code=400, detail="firm_user_id is required")
-
-        logger.info(f"[SOCIAL OAUTH] 🚀 Starting Facebook OAuth for user: {firm_user_id}, agent: {agent_id}")
-
-        # Get GHL location ID for this user
-        ghl_result = supabase.table('ghl_subaccounts').select(
-            'ghl_location_id'
-        ).eq('firm_user_id', firm_user_id).execute()
-
-        if not ghl_result.data or len(ghl_result.data) == 0:
-            logger.error(f"[SOCIAL OAUTH] ❌ No GHL location found for user: {firm_user_id}")
-            raise HTTPException(status_code=404, detail="User not found or no GHL location associated")
-
-        location_id = ghl_result.data[0]['ghl_location_id']
-        logger.info(f"[SOCIAL OAUTH] Found location_id: {location_id}")
-
-        # Get the OAuth automation instance
-        automation = get_oauth_automation()
-
-        # Get Facebook OAuth URL from GHL automation
-        result = await automation.get_facebook_oauth_url(location_id)
-
-        if result['success']:
-            # Append user_id and agent_id to OAuth URL for tracking
-            oauth_url = result['oauth_url']
-            separator = '&' if '?' in oauth_url else '?'
-            oauth_url = f"{oauth_url}{separator}userId={firm_user_id}&agentId={agent_id}"
-
-            logger.info(f"[SOCIAL OAUTH] ✅ Successfully generated OAuth URL")
-            return {
-                "success": True,
-                "oauth_url": oauth_url
+        "table": "table_name",
+        "filters": [
+            {
+                "column": "column_name",
+                "operator": "eq" | "neq" | "gt" | "gte" | "lt" | "lte" | "like" | "ilike" | "in",
+                "value": "value"
             }
-        else:
-            logger.error(f"[SOCIAL OAUTH] ❌ Failed to get OAuth URL: {result.get('message', 'Unknown error')}")
-            raise HTTPException(status_code=500, detail=result.get('message', 'Failed to generate OAuth URL'))
+        ],
+        "select": "*" (optional),
+        "limit": 100 (optional),
+        "order": {"column": "created_at", "ascending": false} (optional)
+    }
+    """
+    try:
+        body = await request.json()
+        table_name = body.get('table')
+        filters = body.get('filters', [])
+        select_fields = body.get('select', '*')
+        limit = body.get('limit')
+        order = body.get('order')
+
+        if not table_name:
+            raise HTTPException(status_code=400, detail="table is required")
+
+        # Build query
+        query = supabase.table(table_name).select(select_fields)
+
+        # Apply filters
+        for filter_item in filters:
+            column = filter_item.get('column')
+            operator = filter_item.get('operator', 'eq')
+            value = filter_item.get('value')
+
+            if not column:
+                continue
+
+            if operator == 'eq':
+                query = query.eq(column, value)
+            elif operator == 'neq':
+                query = query.neq(column, value)
+            elif operator == 'gt':
+                query = query.gt(column, value)
+            elif operator == 'gte':
+                query = query.gte(column, value)
+            elif operator == 'lt':
+                query = query.lt(column, value)
+            elif operator == 'lte':
+                query = query.lte(column, value)
+            elif operator == 'like':
+                query = query.like(column, value)
+            elif operator == 'ilike':
+                query = query.ilike(column, value)
+            elif operator == 'in':
+                query = query.in_(column, value)
+
+        # Apply order
+        if order:
+            order_column = order.get('column', 'created_at')
+            ascending = order.get('ascending', False)
+            query = query.order(order_column, desc=not ascending)
+
+        # Apply limit
+        if limit:
+            query = query.limit(limit)
+
+        # Execute query
+        result = query.execute()
+
+        return result.data
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"[SOCIAL OAUTH] 💥 Unexpected error: {str(e)}")
+        logger.error(f"Supabase query error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # ============================================================================
-# END GHL OAUTH AUTOMATION ENDPOINTS
+# SOCIAL MEDIA OAUTH ENDPOINTS
+# Note: Facebook/Instagram OAuth endpoints are handled by routers:
+# - GHL_Marketing/social_facebook.py - /api/social/facebook/*
+# - GHL_Marketing/social_instagram.py - /api/social/instagram/*
+# These routers are mounted below in the "Social Media Routes" section
 # ============================================================================
 
 # ============================================================================
