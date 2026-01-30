@@ -7460,6 +7460,30 @@ except Exception as e:
     logger.error(f"Error loading Knowledge Base routes: {e}")
 
 # ============================================================================
+# SOCIAL MEDIA ROUTES - FACEBOOK
+# ============================================================================
+try:
+    from routes.social_facebook import router as social_facebook_router
+    app.include_router(social_facebook_router)
+    logger.info("Social Media Facebook routes loaded successfully")
+except ImportError as e:
+    logger.warning(f"Social Media Facebook routes not available: {e}")
+except Exception as e:
+    logger.error(f"Error loading Social Media Facebook routes: {e}")
+
+# ============================================================================
+# SOCIAL MEDIA ROUTES - INSTAGRAM
+# ============================================================================
+try:
+    from routes.social_instagram import router as social_instagram_router
+    app.include_router(social_instagram_router)
+    logger.info("Social Media Instagram routes loaded successfully")
+except ImportError as e:
+    logger.warning(f"Social Media Instagram routes not available: {e}")
+except Exception as e:
+    logger.error(f"Error loading Social Media Instagram routes: {e}")
+
+# ============================================================================
 # MCP (Model Context Protocol) INTEGRATION
 # ============================================================================
 
