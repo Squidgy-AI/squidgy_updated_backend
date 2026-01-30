@@ -7546,6 +7546,72 @@ async def get_facebook_oauth_url(request: Request):
         logger.error(f"Error in OAuth automation: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/api/social/facebook/start-oauth")
+async def start_facebook_social_oauth(request: Request):
+    """
+    Start Facebook OAuth for Social Media Posting integration
+
+    Request body:
+    {
+        "firm_user_id": "string",
+        "agent_id": "string"
+    }
+
+    Returns:
+    {
+        "success": true,
+        "oauth_url": "https://..."
+    }
+    """
+    try:
+        body = await request.json()
+        firm_user_id = body.get('firm_user_id')
+        agent_id = body.get('agent_id', 'SOL')
+
+        if not firm_user_id:
+            raise HTTPException(status_code=400, detail="firm_user_id is required")
+
+        logger.info(f"[SOCIAL OAUTH] 🚀 Starting Facebook OAuth for user: {firm_user_id}, agent: {agent_id}")
+
+        # Get GHL location ID for this user
+        ghl_result = supabase.table('ghl_subaccounts').select(
+            'ghl_location_id'
+        ).eq('firm_user_id', firm_user_id).execute()
+
+        if not ghl_result.data or len(ghl_result.data) == 0:
+            logger.error(f"[SOCIAL OAUTH] ❌ No GHL location found for user: {firm_user_id}")
+            raise HTTPException(status_code=404, detail="User not found or no GHL location associated")
+
+        location_id = ghl_result.data[0]['ghl_location_id']
+        logger.info(f"[SOCIAL OAUTH] Found location_id: {location_id}")
+
+        # Get the OAuth automation instance
+        automation = get_oauth_automation()
+
+        # Get Facebook OAuth URL from GHL automation
+        result = await automation.get_facebook_oauth_url(location_id)
+
+        if result['success']:
+            # Append user_id and agent_id to OAuth URL for tracking
+            oauth_url = result['oauth_url']
+            separator = '&' if '?' in oauth_url else '?'
+            oauth_url = f"{oauth_url}{separator}userId={firm_user_id}&agentId={agent_id}"
+
+            logger.info(f"[SOCIAL OAUTH] ✅ Successfully generated OAuth URL")
+            return {
+                "success": True,
+                "oauth_url": oauth_url
+            }
+        else:
+            logger.error(f"[SOCIAL OAUTH] ❌ Failed to get OAuth URL: {result.get('message', 'Unknown error')}")
+            raise HTTPException(status_code=500, detail=result.get('message', 'Failed to generate OAuth URL'))
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[SOCIAL OAUTH] 💥 Unexpected error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 # ============================================================================
 # END GHL OAUTH AUTOMATION ENDPOINTS
 # ============================================================================
