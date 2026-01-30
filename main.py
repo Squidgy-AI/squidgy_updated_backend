@@ -3269,13 +3269,14 @@ async def website_analysis_complete_endpoint(
 Please provide in JSON format:
 {{
   "company_name": "The company or product name",
-  "company_description": "A brief 2-3 sentence description of what the company does",
+  "company_description": "A comprehensive 4-5 sentence description covering: what the company does, their main products/services, who they serve, and what makes them notable or unique in their space",
   "value_proposition": "A concise statement (1-2 sentences) explaining the unique value or benefit this company/product offers",
   "business_niche": "The specific industry or market segment (e.g., 'E-commerce Platform', 'SaaS Analytics', 'Fintech')",
   "tags": ["tag1", "tag2", "tag3", "tag4", "tag5"]
 }}
 
 Guidelines:
+- company_description should be detailed (4-5 complete sentences)
 - Focus on WHAT they offer and WHY it matters
 - Be specific about their market/industry
 - Use 3-5 relevant keywords as tags
