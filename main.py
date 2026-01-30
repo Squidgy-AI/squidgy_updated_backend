@@ -3291,17 +3291,33 @@ Provide ONLY valid JSON, no additional text."""
                         "temperature": 0.3,
                         "max_tokens": 1500
                     },
-                    timeout=60.0
+                    timeout=20.0  # Reduced to 20s to allow time for fallback before Heroku's 30s timeout
                 )
 
                 response.raise_for_status()
                 data = response.json()
 
-            ai_response = data['choices'][0]['message']['content'].strip()
-            logger.info(f"✓ OpenRouter Web Search completed (FREE model)")
-            print(f"✓ OpenRouter Web Search completed (FREE model)", flush=True)
+            logger.info(f"✓ OpenRouter API returned 200 OK")
+            print(f"✓ OpenRouter API returned 200 OK", flush=True)
 
-            # Parse JSON from response
+            # Check if response has expected structure
+            if 'choices' not in data or len(data['choices']) == 0:
+                raise Exception(f"Invalid API response structure: {data}")
+
+            ai_response = data['choices'][0]['message']['content'].strip()
+            response_length = len(ai_response)
+            logger.info(f"✓ OpenRouter Web Search completed (FREE model), response length: {response_length}")
+            print(f"✓ OpenRouter Web Search completed (FREE model), response length: {response_length}", flush=True)
+
+            # Check response size - if too large, might cause issues
+            if response_length > 10000:
+                logger.warning(f"⚠️ Response very large ({response_length} chars), truncating to 8000")
+                ai_response = ai_response[:8000]
+
+            # Parse JSON from response with timeout protection
+            logger.info(f"🔍 Parsing JSON from response...")
+            print(f"🔍 Parsing JSON from response...", flush=True)
+
             json_match = re.search(r'```json\s*(.*?)\s*```', ai_response, re.DOTALL)
             if json_match:
                 json_str = json_match.group(1)
@@ -3311,6 +3327,9 @@ Provide ONLY valid JSON, no additional text."""
                     json_str = json_match.group(0)
                 else:
                     json_str = ai_response
+
+            logger.info(f"🔍 Found JSON string, length: {len(json_str)}")
+            print(f"🔍 Found JSON string, length: {len(json_str)}, attempting to parse...", flush=True)
 
             ai_extracted = json.loads(json_str)
             logger.info(f"✓ AI analysis completed: {ai_extracted}")
