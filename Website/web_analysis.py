@@ -1,5 +1,6 @@
 # Website/web_analysis.py - Web scraping and analysis module
 
+import os
 import time
 import logging
 import httpx
@@ -11,7 +12,7 @@ from typing import Dict, Any, Optional
 logger = logging.getLogger(__name__)
 
 # OpenRouter configuration
-OPENROUTER_API_KEY = "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"
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 OPENROUTER_MODEL = "deepseek/deepseek-r1-0528:free"  # Free model
 
@@ -27,6 +28,9 @@ def openrouter_web_search_fallback(url: str) -> Dict[str, Any]:
         Dict with content formatted like scraper output
     """
     try:
+        if not OPENROUTER_API_KEY:
+            raise Exception("OPENROUTER_API_KEY environment variable not set")
+
         logger.info(f"Using OpenRouter Web Search fallback for {url}")
 
         response = httpx.post(
