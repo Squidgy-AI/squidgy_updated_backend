@@ -6904,7 +6904,7 @@ async def extract_text_from_file(
             raise HTTPException(status_code=400, detail="Empty file downloaded")
 
         # Extract text
-        extracted_text = processor.extract_text(file_bytes, file_name)
+        extracted_text = await processor.extract_text(file_bytes, file_name)
 
         if not extracted_text or not extracted_text.strip():
             raise HTTPException(status_code=400, detail="No text content found in file")

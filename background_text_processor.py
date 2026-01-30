@@ -9,6 +9,7 @@ import logging
 import tempfile
 import os
 import re
+import base64
 from typing import Optional, Dict, Any, List
 import httpx
 from pathlib import Path
@@ -117,6 +118,76 @@ class TextExtractor:
             logger.error(f"DOCX extraction error: {e}")
             raise Exception(f"Failed to extract text from DOCX: {str(e)}")
 
+    @staticmethod
+    async def extract_from_image(file_bytes: bytes, file_name: str) -> str:
+        """Extract text from image using OpenRouter vision model"""
+        try:
+            # Get OpenRouter API key from environment
+            openrouter_api_key = os.getenv('OPENROUTER_API_KEY')
+            if not openrouter_api_key:
+                raise Exception("OPENROUTER_API_KEY not configured")
+
+            # Convert image bytes to base64
+            base64_image = base64.b64encode(file_bytes).decode('utf-8')
+
+            # Detect image format from file extension
+            file_ext = Path(file_name).suffix.lower()
+            image_format_map = {
+                '.png': 'image/png',
+                '.jpg': 'image/jpeg',
+                '.jpeg': 'image/jpeg',
+                '.gif': 'image/gif',
+                '.bmp': 'image/bmp',
+                '.webp': 'image/webp'
+            }
+            mime_type = image_format_map.get(file_ext, 'image/jpeg')
+
+            # Prepare the API request
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {openrouter_api_key}",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "model": "qwen/qwen2.5-vl-72b-instruct:free",
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": [
+                                    {
+                                        "type": "text",
+                                        "text": "Extract all text from this image. Return only the extracted text without any additional commentary or formatting. If there is no text in the image, return 'No text found in image'."
+                                    },
+                                    {
+                                        "type": "image_url",
+                                        "image_url": {
+                                            "url": f"data:{mime_type};base64,{base64_image}"
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                )
+
+                response.raise_for_status()
+                result = response.json()
+
+                # Extract the text from the response
+                extracted_text = result.get('choices', [{}])[0].get('message', {}).get('content', '')
+
+                if not extracted_text or extracted_text.strip() == '':
+                    return f"[Image file: {file_name}] - No text extracted"
+
+                return extracted_text.strip()
+
+        except Exception as e:
+            logger.error(f"Image text extraction error: {e}")
+            # Fallback message if extraction fails
+            return f"[Image file: {file_name}] - Text extraction failed: {str(e)}"
+
 
 class BackgroundTextProcessor:
     """Handles background processing of file text extraction"""
@@ -198,13 +269,13 @@ class BackgroundTextProcessor:
 
         return chunks
 
-    def extract_text(self, file_bytes: bytes, file_name: str) -> str:
+    async def extract_text(self, file_bytes: bytes, file_name: str) -> str:
         """Extract text based on file extension"""
         file_ext = Path(file_name).suffix.lower()
 
-        # Handle image files - no text extraction needed, Claude can process images directly
+        # Handle image files - extract text using OpenRouter vision model
         if file_ext in ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp']:
-            return f"[Image file: {file_name}]"
+            return await self.text_extractor.extract_from_image(file_bytes, file_name)
 
         if file_ext == '.pdf':
             return self.text_extractor.extract_from_pdf(file_bytes)
@@ -279,7 +350,7 @@ class BackgroundTextProcessor:
 
             # Extract text
             logger.info(f"Extracting text from: {file_record['file_name']}")
-            extracted_text = self.extract_text(file_bytes, file_record["file_name"])
+            extracted_text = await self.extract_text(file_bytes, file_record["file_name"])
 
             if not extracted_text.strip():
                 raise Exception("No text content found in file")
