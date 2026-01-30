@@ -529,6 +529,7 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 PERPLEXITY_API_KEY = os.getenv("PERPLEXITY_API_KEY")
 # OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 N8N_MAIN = os.getenv("N8N_MAIN", "https://n8n.theaiteam.uk/webhook/c2fcbad6-abc0-43af-8aa8-d1661ff4461d")
 N8N_MAIN_TEST = os.getenv("N8N_MAIN_TEST")
 
@@ -2955,10 +2956,13 @@ async def analyze_website_content_with_ai(scraped_content: str, url: str) -> dic
         dict with extracted fields: company_name, value_proposition, business_niche, tags
     """
     try:
-        import openai
         from openai import AsyncOpenAI
 
-        client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+        # Use OpenRouter API (compatible with OpenAI SDK)
+        client = AsyncOpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=OPENROUTER_API_KEY
+        )
 
         # Strip out filler text to check actual content size
         filler_patterns = [
@@ -3022,9 +3026,13 @@ Guidelines:
 
 Provide ONLY the JSON response, no additional text."""
 
-        # Call OpenAI API
+        # Call OpenRouter API
         response = await client.chat.completions.create(
-            model="gpt-4o-mini",
+            extra_headers={
+                "HTTP-Referer": "https://app.squidgy.ai",
+                "X-Title": "Squidgy AI Website Analyzer"
+            },
+            model="deepseek/deepseek-chat",  # Cost-effective model good for structured extraction
             messages=[
                 {"role": "system", "content": "You are a business analyst expert at extracting key information from website content. Always respond with valid JSON only."},
                 {"role": "user", "content": prompt}
