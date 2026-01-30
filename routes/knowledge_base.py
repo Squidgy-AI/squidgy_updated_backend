@@ -29,6 +29,20 @@ class InstructionsResponse(BaseModel):
     instructions: str
 
 
+@router.get("/debug/config")
+async def debug_config():
+    """
+    Debug endpoint to check environment variable configuration
+    """
+    return {
+        "neon_api_url_set": bool(NEON_API_URL),
+        "neon_api_url_length": len(NEON_API_URL) if NEON_API_URL else 0,
+        "neon_api_key_set": bool(NEON_API_KEY),
+        "neon_api_key_length": len(NEON_API_KEY) if NEON_API_KEY else 0,
+        "neon_api_key_prefix": NEON_API_KEY[:10] + "..." if NEON_API_KEY and len(NEON_API_KEY) > 10 else "NOT_SET"
+    }
+
+
 @router.get("/files/{user_id}", response_model=FileResponse)
 async def get_user_files(user_id: str):
     """
