@@ -3422,7 +3422,9 @@ Guidelines:
 Provide ONLY valid JSON, no additional text."""
 
         try:
-            # Try FREE model first
+            # Use PAID model directly (FREE model too slow/unreliable - takes 60+ seconds, causes timeouts)
+            # PAID model: deepseek/deepseek-chat - Only $0.14/1M tokens (basically free)
+            # Completes in ~13 seconds (well under Heroku's 30s timeout)
             # See: https://openrouter.ai/docs/guides/features/plugins/web-search
             async with httpx.AsyncClient() as http_client:
                 response = await http_client.post(
@@ -3434,7 +3436,7 @@ Provide ONLY valid JSON, no additional text."""
                         "X-Title": "Squidgy AI Website Analyzer"
                     },
                     json={
-                        "model": "deepseek/deepseek-r1-0528:free",  # 100% FREE model with web search
+                        "model": "deepseek/deepseek-chat",  # PAID but cheap ($0.14/1M tokens), fast & reliable
                         "plugins": [{"id": "web", "engine": "native", "max_results": 5}],
                         "messages": [{
                             "role": "user",
@@ -3458,8 +3460,8 @@ Provide ONLY valid JSON, no additional text."""
 
             ai_response = data['choices'][0]['message']['content'].strip()
             response_length = len(ai_response)
-            logger.info(f"✓ OpenRouter Web Search completed (FREE model), response length: {response_length}")
-            print(f"✓ OpenRouter Web Search completed (FREE model), response length: {response_length}", flush=True)
+            logger.info(f"✓ OpenRouter Web Search completed (PAID model: deepseek-chat), response length: {response_length}")
+            print(f"✓ OpenRouter Web Search completed (PAID model: deepseek-chat), response length: {response_length}", flush=True)
 
             # Check response size - if too large, might cause issues
             if response_length > 10000:
@@ -3493,13 +3495,13 @@ Provide ONLY valid JSON, no additional text."""
         except Exception as e:
             import traceback
             error_details = traceback.format_exc()
-            logger.error(f"❌ FREE model failed: {str(e)}")
-            print(f"❌ FREE model failed: {str(e)}, trying PAID model fallback...", flush=True)
+            logger.error(f"❌ Primary request failed: {str(e)}")
+            print(f"❌ Primary request failed: {str(e)}, retrying with fresh request...", flush=True)
 
-            # FALLBACK: Use PAID model directly with httpx (inline implementation)
+            # RETRY: Try again with fresh httpx connection
             try:
-                logger.info(f"🔄 Falling back to PAID model (deepseek/deepseek-chat)")
-                print(f"🔄 Falling back to PAID model (deepseek/deepseek-chat)", flush=True)
+                logger.info(f"🔄 Retrying with fresh connection (deepseek/deepseek-chat)")
+                print(f"🔄 Retrying with fresh connection (deepseek/deepseek-chat)", flush=True)
 
                 # Call OpenRouter API with PAID model using httpx
                 async with httpx.AsyncClient() as http_client:
@@ -3532,21 +3534,21 @@ Provide ONLY valid JSON, no additional text."""
 
                 # Check response structure
                 if 'choices' not in fallback_data or len(fallback_data['choices']) == 0:
-                    raise Exception(f"Invalid fallback response structure: {fallback_data}")
+                    raise Exception(f"Invalid retry response structure: {fallback_data}")
 
                 ai_response = fallback_data['choices'][0]['message']['content'].strip()
                 response_length = len(ai_response)
-                logger.info(f"✓ OpenRouter Web Search completed (PAID model fallback), response length: {response_length}")
-                print(f"✓ OpenRouter Web Search completed (PAID model fallback), response length: {response_length}", flush=True)
+                logger.info(f"✓ OpenRouter Web Search completed (retry attempt), response length: {response_length}")
+                print(f"✓ OpenRouter Web Search completed (retry attempt), response length: {response_length}", flush=True)
 
                 # Check response size
                 if response_length > 10000:
-                    logger.warning(f"⚠️ Fallback response very large ({response_length} chars), truncating to 8000")
+                    logger.warning(f"⚠️ Retry response very large ({response_length} chars), truncating to 8000")
                     ai_response = ai_response[:8000]
 
                 # Parse JSON from response
-                logger.info(f"🔍 Parsing JSON from fallback response...")
-                print(f"🔍 Parsing JSON from fallback response...", flush=True)
+                logger.info(f"🔍 Parsing JSON from retry response...")
+                print(f"🔍 Parsing JSON from retry response...", flush=True)
 
                 json_match = re.search(r'```json\s*(.*?)\s*```', ai_response, re.DOTALL)
                 if json_match:
@@ -3558,25 +3560,25 @@ Provide ONLY valid JSON, no additional text."""
                     else:
                         json_str = ai_response
 
-                logger.info(f"🔍 Found JSON string from fallback, length: {len(json_str)}")
-                print(f"🔍 Found JSON string from fallback, length: {len(json_str)}, attempting to parse...", flush=True)
+                logger.info(f"🔍 Found JSON string from retry, length: {len(json_str)}")
+                print(f"🔍 Found JSON string from retry, length: {len(json_str)}, attempting to parse...", flush=True)
 
                 ai_extracted = json.loads(json_str)
-                logger.info(f"✓ AI analysis completed with PAID model fallback: {ai_extracted}")
-                print(f"✓ AI analysis completed with PAID model fallback: {ai_extracted}", flush=True)
+                logger.info(f"✓ AI analysis completed with retry: {ai_extracted}")
+                print(f"✓ AI analysis completed with retry: {ai_extracted}", flush=True)
 
                 # Set response_text for company_description
                 response_text = ai_extracted.get('company_description', f"AI-analyzed content for {request.url}")
 
-            except Exception as fallback_error:
+            except Exception as retry_error:
                 import traceback
-                fallback_details = traceback.format_exc()
-                logger.error(f"❌ PAID model fallback also failed: {str(fallback_error)}")
-                logger.error(f"❌ Fallback Traceback:\n{fallback_details}")
-                print(f"❌ Both FREE and PAID models failed: {str(fallback_error)}", flush=True)
+                retry_details = traceback.format_exc()
+                logger.error(f"❌ Retry also failed: {str(retry_error)}")
+                logger.error(f"❌ Retry Traceback:\n{retry_details}")
+                print(f"❌ Both attempts failed: {str(retry_error)}", flush=True)
                 return {
                     "status": "error",
-                    "message": f"Website analysis failed (both FREE and PAID models): {str(fallback_error)}"
+                    "message": f"Website analysis failed after retry: {str(retry_error)}"
                 }
         # ========== END ACTIVE SECTION ==========
 
