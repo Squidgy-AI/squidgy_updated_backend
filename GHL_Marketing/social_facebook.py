@@ -49,14 +49,14 @@ class ConnectPageRequest(BaseModel):
 
 async def get_ghl_tokens(firm_user_id: str, agent_id: str = "SOL"):
     """
-    Fetch GHL location_id, Firebase Token, and Access Token from database
+    Fetch GHL location_id, Firebase Token, and Access Token from ghl_subaccounts table
     """
     try:
         logger.info(f"[SOCIAL FB] Fetching GHL tokens for user: {firm_user_id}, agent: {agent_id}")
 
-        # Get location_id and Firebase Token from ghl_subaccounts
+        # Get all tokens from ghl_subaccounts table
         ghl_result = supabase.table('ghl_subaccounts')\
-            .select('ghl_location_id, "Firebase Token", "PIT_Token", soma_ghl_user_id')\
+            .select('ghl_location_id, "Firebase Token", "PIT_Token", soma_ghl_user_id, access_token')\
             .eq('firm_user_id', firm_user_id)\
             .eq('agent_id', agent_id)\
             .single()\
@@ -68,24 +68,10 @@ async def get_ghl_tokens(firm_user_id: str, agent_id: str = "SOL"):
 
         logger.info(f"[SOCIAL FB] Found GHL location: {ghl_result.data.get('ghl_location_id')}")
 
-        # Get access_token from facebook_integrations
-        access_token = None
-        try:
-            fb_result = supabase.table('facebook_integrations')\
-                .select('access_token')\
-                .eq('firm_user_id', firm_user_id)\
-                .single()\
-                .execute()
-
-            if fb_result.data and fb_result.data.get('access_token'):
-                access_token = fb_result.data.get('access_token')
-        except Exception as fb_error:
-            logger.error(f"No facebook_integrations record found for {firm_user_id}: {fb_error}")
-
         return {
             'location_id': ghl_result.data.get('ghl_location_id'),
             'firebase_token': ghl_result.data.get('Firebase Token'),
-            'access_token': access_token,
+            'access_token': ghl_result.data.get('access_token') or ghl_result.data.get('PIT_Token'),
             'ghl_user_id': ghl_result.data.get('soma_ghl_user_id')
         }
     except Exception as e:
@@ -279,12 +265,12 @@ async def get_available_facebook_pages(request: GetPagesRequest):
             if data.get('success') and data.get('results', {}).get('pages'):
                 pages = data['results']['pages']
 
-            # Save fetched pages to facebook_integrations table
+            # Save fetched pages to ghl_subaccounts table
             try:
-                supabase.table('facebook_integrations').update({
+                supabase.table('ghl_subaccounts').update({
                     'pages': pages,
                     'updated_at': __import__('datetime').datetime.now().isoformat()
-                }).eq('firm_user_id', request.firm_user_id).execute()
+                }).eq('firm_user_id', request.firm_user_id).eq('agent_id', request.agent_id).execute()
                 logger.info(f"[SOCIAL FB] Saved {len(pages)} available pages to database")
             except Exception as db_error:
                 logger.warning(f"[SOCIAL FB] Could not save pages to database: {db_error}")
@@ -370,16 +356,16 @@ async def connect_facebook_page(request: ConnectPageRequest):
 
             data = response.json()
 
-            # Save connected page to facebook_integrations table
+            # Save connected page to ghl_subaccounts table
             try:
                 # Get current connected_pages
-                fb_integration = supabase.table('facebook_integrations').select(
+                ghl_result = supabase.table('ghl_subaccounts').select(
                     'connected_pages'
-                ).eq('firm_user_id', request.firm_user_id).execute()
+                ).eq('firm_user_id', request.firm_user_id).eq('agent_id', request.agent_id).execute()
 
                 current_connected_pages = []
-                if fb_integration.data and fb_integration.data[0].get('connected_pages'):
-                    current_connected_pages = fb_integration.data[0]['connected_pages']
+                if ghl_result.data and ghl_result.data[0].get('connected_pages'):
+                    current_connected_pages = ghl_result.data[0]['connected_pages']
 
                 # Create page data object
                 new_page = {
@@ -402,10 +388,10 @@ async def connect_facebook_page(request: ConnectPageRequest):
                     current_connected_pages.append(new_page)
 
                 # Update database
-                supabase.table('facebook_integrations').update({
+                supabase.table('ghl_subaccounts').update({
                     'connected_pages': current_connected_pages,
                     'updated_at': __import__('datetime').datetime.now().isoformat()
-                }).eq('firm_user_id', request.firm_user_id).execute()
+                }).eq('firm_user_id', request.firm_user_id).eq('agent_id', request.agent_id).execute()
 
                 logger.info(f"[SOCIAL FB] Saved connected page {request.name} to database")
             except Exception as db_error:

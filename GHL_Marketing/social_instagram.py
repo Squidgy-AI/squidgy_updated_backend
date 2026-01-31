@@ -49,12 +49,12 @@ class ConnectAccountRequest(BaseModel):
 
 async def get_ghl_tokens(firm_user_id: str, agent_id: str = "SOL"):
     """
-    Fetch GHL location_id, Firebase Token, and Access Token from database
+    Fetch GHL location_id, Firebase Token, and Access Token from ghl_subaccounts table
     """
     try:
-        # Get location_id and Firebase Token from ghl_subaccounts
+        # Get all tokens from ghl_subaccounts table
         ghl_result = supabase.table('ghl_subaccounts')\
-            .select('ghl_location_id, "Firebase Token", "PIT_Token", soma_ghl_user_id')\
+            .select('ghl_location_id, "Firebase Token", "PIT_Token", soma_ghl_user_id, access_token')\
             .eq('firm_user_id', firm_user_id)\
             .eq('agent_id', agent_id)\
             .single()\
@@ -63,24 +63,10 @@ async def get_ghl_tokens(firm_user_id: str, agent_id: str = "SOL"):
         if not ghl_result.data:
             return None
 
-        # Get access_token from facebook_integrations
-        access_token = None
-        try:
-            fb_result = supabase.table('facebook_integrations')\
-                .select('access_token')\
-                .eq('firm_user_id', firm_user_id)\
-                .single()\
-                .execute()
-
-            if fb_result.data and fb_result.data.get('access_token'):
-                access_token = fb_result.data.get('access_token')
-        except Exception as fb_error:
-            logger.error(f"No facebook_integrations record found for {firm_user_id}: {fb_error}")
-
         return {
             'location_id': ghl_result.data.get('ghl_location_id'),
             'firebase_token': ghl_result.data.get('Firebase Token'),
-            'access_token': access_token,
+            'access_token': ghl_result.data.get('access_token') or ghl_result.data.get('PIT_Token'),
             'ghl_user_id': ghl_result.data.get('soma_ghl_user_id')
         }
     except Exception as e:
@@ -263,16 +249,16 @@ async def get_available_instagram_accounts(request: GetAccountsRequest):
             if data.get('success') and data.get('results', {}).get('accounts'):
                 accounts = data['results']['accounts']
 
-            # Save fetched Instagram accounts to facebook_integrations table (pages field stores both FB pages and IG accounts)
+            # Save fetched Instagram accounts to ghl_subaccounts table (pages field stores both FB pages and IG accounts)
             try:
                 # Get current pages to merge with Instagram accounts
-                fb_integration = supabase.table('facebook_integrations').select(
+                ghl_result = supabase.table('ghl_subaccounts').select(
                     'pages'
-                ).eq('firm_user_id', request.firm_user_id).execute()
+                ).eq('firm_user_id', request.firm_user_id).eq('agent_id', request.agent_id).execute()
 
                 current_pages = []
-                if fb_integration.data and fb_integration.data[0].get('pages'):
-                    current_pages = fb_integration.data[0]['pages']
+                if ghl_result.data and ghl_result.data[0].get('pages'):
+                    current_pages = ghl_result.data[0]['pages']
                     # Filter out old Instagram accounts to avoid duplicates
                     current_pages = [p for p in current_pages if p.get('platform') != 'instagram']
 
@@ -283,10 +269,10 @@ async def get_available_instagram_accounts(request: GetAccountsRequest):
                 # Merge Facebook pages and Instagram accounts
                 all_pages = current_pages + accounts
 
-                supabase.table('facebook_integrations').update({
+                supabase.table('ghl_subaccounts').update({
                     'pages': all_pages,
                     'updated_at': __import__('datetime').datetime.now().isoformat()
-                }).eq('firm_user_id', request.firm_user_id).execute()
+                }).eq('firm_user_id', request.firm_user_id).eq('agent_id', request.agent_id).execute()
                 logger.info(f"[SOCIAL IG] Saved {len(accounts)} available Instagram accounts to database")
             except Exception as db_error:
                 logger.warning(f"[SOCIAL IG] Could not save Instagram accounts to database: {db_error}")
@@ -370,16 +356,16 @@ async def connect_instagram_account(request: ConnectAccountRequest):
 
             data = response.json()
 
-            # Save connected Instagram account to facebook_integrations table
+            # Save connected Instagram account to ghl_subaccounts table
             try:
                 # Get current connected_pages
-                fb_integration = supabase.table('facebook_integrations').select(
+                ghl_result = supabase.table('ghl_subaccounts').select(
                     'connected_pages'
-                ).eq('firm_user_id', request.firm_user_id).execute()
+                ).eq('firm_user_id', request.firm_user_id).eq('agent_id', request.agent_id).execute()
 
                 current_connected_pages = []
-                if fb_integration.data and fb_integration.data[0].get('connected_pages'):
-                    current_connected_pages = fb_integration.data[0]['connected_pages']
+                if ghl_result.data and ghl_result.data[0].get('connected_pages'):
+                    current_connected_pages = ghl_result.data[0]['connected_pages']
 
                 # Create Instagram account data object
                 new_account = {
@@ -402,10 +388,10 @@ async def connect_instagram_account(request: ConnectAccountRequest):
                     current_connected_pages.append(new_account)
 
                 # Update database
-                supabase.table('facebook_integrations').update({
+                supabase.table('ghl_subaccounts').update({
                     'connected_pages': current_connected_pages,
                     'updated_at': __import__('datetime').datetime.now().isoformat()
-                }).eq('firm_user_id', request.firm_user_id).execute()
+                }).eq('firm_user_id', request.firm_user_id).eq('agent_id', request.agent_id).execute()
 
                 logger.info(f"[SOCIAL IG] Saved connected Instagram account {request.name} to database")
             except Exception as db_error:
