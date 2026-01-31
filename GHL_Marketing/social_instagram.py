@@ -268,6 +268,35 @@ async def get_available_instagram_accounts(request: GetAccountsRequest):
             if data.get('success') and data.get('results', {}).get('accounts'):
                 accounts = data['results']['accounts']
 
+            # Save fetched Instagram accounts to facebook_integrations table (pages field stores both FB pages and IG accounts)
+            try:
+                # Get current pages to merge with Instagram accounts
+                fb_integration = supabase.table('facebook_integrations').select(
+                    'pages'
+                ).eq('firm_user_id', request.firm_user_id).execute()
+
+                current_pages = []
+                if fb_integration.data and fb_integration.data[0].get('pages'):
+                    current_pages = fb_integration.data[0]['pages']
+                    # Filter out old Instagram accounts to avoid duplicates
+                    current_pages = [p for p in current_pages if p.get('platform') != 'instagram']
+
+                # Add Instagram accounts with platform identifier
+                for account in accounts:
+                    account['platform'] = 'instagram'
+
+                # Merge Facebook pages and Instagram accounts
+                all_pages = current_pages + accounts
+
+                supabase.table('facebook_integrations').update({
+                    'pages': all_pages,
+                    'updated_at': __import__('datetime').datetime.now().isoformat()
+                }).eq('firm_user_id', request.firm_user_id).execute()
+                logger.info(f"[SOCIAL IG] Saved {len(accounts)} available Instagram accounts to database")
+            except Exception as db_error:
+                logger.warning(f"[SOCIAL IG] Could not save Instagram accounts to database: {db_error}")
+                # Don't fail the request if database save fails
+
             return {
                 "success": True,
                 "accounts": accounts,
@@ -345,6 +374,48 @@ async def connect_instagram_account(request: ConnectAccountRequest):
                 )
 
             data = response.json()
+
+            # Save connected Instagram account to facebook_integrations table
+            try:
+                # Get current connected_pages
+                fb_integration = supabase.table('facebook_integrations').select(
+                    'connected_pages'
+                ).eq('firm_user_id', request.firm_user_id).execute()
+
+                current_connected_pages = []
+                if fb_integration.data and fb_integration.data[0].get('connected_pages'):
+                    current_connected_pages = fb_integration.data[0]['connected_pages']
+
+                # Create Instagram account data object
+                new_account = {
+                    "originId": request.origin_id,
+                    "name": request.name,
+                    "avatar": request.avatar or "",
+                    "platform": "instagram",
+                    "type": "account",
+                    "oauth_id": request.oauth_id,
+                    "connected_at": __import__('datetime').datetime.now().isoformat()
+                }
+
+                # Check if account already exists (by originId)
+                account_exists = any(
+                    page.get('originId') == request.origin_id
+                    for page in current_connected_pages
+                )
+
+                if not account_exists:
+                    current_connected_pages.append(new_account)
+
+                # Update database
+                supabase.table('facebook_integrations').update({
+                    'connected_pages': current_connected_pages,
+                    'updated_at': __import__('datetime').datetime.now().isoformat()
+                }).eq('firm_user_id', request.firm_user_id).execute()
+
+                logger.info(f"[SOCIAL IG] Saved connected Instagram account {request.name} to database")
+            except Exception as db_error:
+                logger.warning(f"[SOCIAL IG] Could not save connected Instagram account to database: {db_error}")
+                # Don't fail the request if database save fails
 
             return {
                 "success": True,

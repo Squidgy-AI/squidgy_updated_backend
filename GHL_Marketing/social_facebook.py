@@ -284,6 +284,17 @@ async def get_available_facebook_pages(request: GetPagesRequest):
             if data.get('success') and data.get('results', {}).get('pages'):
                 pages = data['results']['pages']
 
+            # Save fetched pages to facebook_integrations table
+            try:
+                supabase.table('facebook_integrations').update({
+                    'pages': pages,
+                    'updated_at': __import__('datetime').datetime.now().isoformat()
+                }).eq('firm_user_id', request.firm_user_id).execute()
+                logger.info(f"[SOCIAL FB] Saved {len(pages)} available pages to database")
+            except Exception as db_error:
+                logger.warning(f"[SOCIAL FB] Could not save pages to database: {db_error}")
+                # Don't fail the request if database save fails
+
             return {
                 "success": True,
                 "pages": pages,
@@ -363,6 +374,48 @@ async def connect_facebook_page(request: ConnectPageRequest):
                 )
 
             data = response.json()
+
+            # Save connected page to facebook_integrations table
+            try:
+                # Get current connected_pages
+                fb_integration = supabase.table('facebook_integrations').select(
+                    'connected_pages'
+                ).eq('firm_user_id', request.firm_user_id).execute()
+
+                current_connected_pages = []
+                if fb_integration.data and fb_integration.data[0].get('connected_pages'):
+                    current_connected_pages = fb_integration.data[0]['connected_pages']
+
+                # Create page data object
+                new_page = {
+                    "originId": request.origin_id,
+                    "name": request.name,
+                    "avatar": request.avatar or "",
+                    "platform": "facebook",
+                    "type": "page",
+                    "oauth_id": request.oauth_id,
+                    "connected_at": __import__('datetime').datetime.now().isoformat()
+                }
+
+                # Check if page already exists (by originId)
+                page_exists = any(
+                    page.get('originId') == request.origin_id
+                    for page in current_connected_pages
+                )
+
+                if not page_exists:
+                    current_connected_pages.append(new_page)
+
+                # Update database
+                supabase.table('facebook_integrations').update({
+                    'connected_pages': current_connected_pages,
+                    'updated_at': __import__('datetime').datetime.now().isoformat()
+                }).eq('firm_user_id', request.firm_user_id).execute()
+
+                logger.info(f"[SOCIAL FB] Saved connected page {request.name} to database")
+            except Exception as db_error:
+                logger.warning(f"[SOCIAL FB] Could not save connected page to database: {db_error}")
+                # Don't fail the request if database save fails
 
             return {
                 "success": True,
