@@ -68,7 +68,7 @@ async def get_ghl_tokens(firm_user_id: str, agent_id: str = "SOL"):
 
         logger.info(f"[SOCIAL FB] Found GHL location: {ghl_result.data.get('ghl_location_id')}")
 
-        # Get access_token from facebook_integrations (fallback to PIT_Token if not available)
+        # Get access_token from facebook_integrations
         access_token = None
         try:
             fb_result = supabase.table('facebook_integrations')\
@@ -80,12 +80,7 @@ async def get_ghl_tokens(firm_user_id: str, agent_id: str = "SOL"):
             if fb_result.data and fb_result.data.get('access_token'):
                 access_token = fb_result.data.get('access_token')
         except Exception as fb_error:
-            # Facebook integration doesn't exist, will use PIT_Token fallback
-            logger.info(f"No facebook_integrations record found for {firm_user_id}, using PIT_Token")
-
-        # Fallback to PIT_Token if no access_token from facebook_integrations
-        if not access_token:
-            access_token = ghl_result.data.get('PIT_Token')
+            logger.error(f"No facebook_integrations record found for {firm_user_id}: {fb_error}")
 
         return {
             'location_id': ghl_result.data.get('ghl_location_id'),
