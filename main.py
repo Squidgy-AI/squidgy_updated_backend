@@ -7139,46 +7139,62 @@ async def retry_facebook_token_capture(request: dict, background_tasks: Backgrou
         raise HTTPException(status_code=500, detail=str(e))
 
 async def run_facebook_retry_automation(firm_user_id: str, location_id: str):
-    """Background task to run the retry automation script"""
+    """Background task to run the retry automation script by calling BackgroundAutomationUser1 service"""
     try:
         print(f"[RETRY AUTOMATION] Starting for firm_user_id: {firm_user_id}, location_id: {location_id}")
-        
-        # Import the retry automation class
-        from ghl_automation_for_retry import HighLevelRetryAutomation
-        
-        # Run the retry automation
-        automation = HighLevelRetryAutomation(headless=True)  # Headless for background execution
-        success = await automation.run_retry_automation("", "", location_id, firm_user_id)
-        
-        # Update automation status based on result
-        if success:
-            supabase.table('facebook_integrations').update({
-                'automation_status': 'retry_completed',
-                'automation_step': 'token_capture_completed',
-                'automation_completed_at': datetime.now().isoformat(),
-                'updated_at': datetime.now().isoformat()
-            }).eq('firm_user_id', firm_user_id).execute()
-            
-            print(f"[RETRY AUTOMATION] ✅ Successfully completed token capture for: {firm_user_id}")
-        else:
-            supabase.table('facebook_integrations').update({
-                'automation_status': 'retry_failed',
-                'automation_step': 'token_capture_failed', 
-                'automation_error': 'Token capture retry failed',
-                'updated_at': datetime.now().isoformat()
-            }).eq('firm_user_id', firm_user_id).execute()
-            
-            print(f"[RETRY AUTOMATION] ❌ Token capture failed for: {firm_user_id}")
-            
+
+        # OLD CODE - COMMENTED OUT (Now using BackgroundAutomationUser1 service)
+        # # Import the retry automation class
+        # from ghl_automation_for_retry import HighLevelRetryAutomation
+        #
+        # # Run the retry automation
+        # automation = HighLevelRetryAutomation(headless=True)  # Headless for background execution
+        # success = await automation.run_retry_automation("", "", location_id, firm_user_id)
+
+        # NEW CODE - Call BackgroundAutomationUser1 service
+        automation_service_url = os.getenv('AUTOMATION_USER1_SERVICE_URL', 'https://backgroundautomationuser1-1644057ede7b.herokuapp.com')
+
+        print(f"[RETRY AUTOMATION] Calling BackgroundAutomationUser1 service at: {automation_service_url}")
+
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            response = await client.post(
+                f"{automation_service_url}/ghl/retry-automation",
+                json={
+                    "location_id": location_id,
+                    "firm_user_id": firm_user_id
+                }
+            )
+
+            if response.status_code == 200:
+                result = response.json()
+                print(f"[RETRY AUTOMATION] ✅ Automation service responded: {result.get('message')}")
+                print(f"[RETRY AUTOMATION] 🎯 Task ID: {result.get('task_id')}")
+                print(f"[RETRY AUTOMATION] 🚀 Automation is running on remote service")
+                print(f"[RETRY AUTOMATION] 💾 Database will be updated automatically by the service")
+
+                # Note: Don't update database here - BackgroundAutomationUser1 service handles it
+            else:
+                error_msg = f"Service returned {response.status_code}: {response.text}"
+                print(f"[RETRY AUTOMATION] ❌ Automation service error: {error_msg}")
+
+                # Update status to failed
+                supabase.table('facebook_integrations').update({
+                    'automation_status': 'retry_failed',
+                    'automation_step': 'service_error',
+                    'automation_error': error_msg,
+                    'updated_at': datetime.now().isoformat()
+                }).eq('firm_user_id', firm_user_id).execute()
+
     except Exception as e:
-        print(f"[RETRY AUTOMATION] ❌ Exception in retry automation: {e}")
-        
+        error_msg = f"Exception calling automation service: {e}"
+        print(f"[RETRY AUTOMATION] ❌ {error_msg}")
+
         # Update status to indicate error
         try:
             supabase.table('facebook_integrations').update({
                 'automation_status': 'retry_error',
                 'automation_step': 'automation_exception',
-                'automation_error': str(e),
+                'automation_error': error_msg,
                 'updated_at': datetime.now().isoformat()
             }).eq('firm_user_id', firm_user_id).execute()
         except Exception as db_error:
