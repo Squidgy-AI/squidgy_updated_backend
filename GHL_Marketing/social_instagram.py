@@ -97,17 +97,23 @@ async def start_instagram_oauth(request: StartOAuthRequest):
             )
 
         location_id = tokens['location_id']
-        # Use agency_user_id from database, or default to k2uP8MkaoPU3Xas79npg (never changes for the login email)
-        agency_user_id = tokens.get('agency_user_id') or 'k2uP8MkaoPU3Xas79npg'
+        soma_ghl_user_id = tokens.get('soma_ghl_user_id')
 
-        # Construct OAuth URL with agency_user_id (NOT soma_ghl_user_id)
-        oauth_url = f"https://backend.leadconnectorhq.com/social-media-posting/oauth/instagram/start?locationId={location_id}&userId={agency_user_id}&loginType=instagram"
+        if not soma_ghl_user_id:
+            raise HTTPException(
+                status_code=404,
+                detail="Missing soma_ghl_user_id - GHL user not created"
+            )
+
+        # Construct OAuth URL with soma_ghl_user_id (created during subaccount setup)
+        # NOTE: agency_user_id is used for Instagram accounts API endpoint, NOT OAuth start URL
+        oauth_url = f"https://backend.leadconnectorhq.com/social-media-posting/oauth/instagram/start?locationId={location_id}&userId={soma_ghl_user_id}&loginType=instagram"
 
         return {
             "success": True,
             "oauth_url": oauth_url,
             "location_id": location_id,
-            "user_id": agency_user_id  # Return agency_user_id
+            "user_id": soma_ghl_user_id  # Return soma_ghl_user_id for OAuth
         }
 
     except HTTPException:
