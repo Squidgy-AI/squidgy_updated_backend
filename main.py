@@ -7885,30 +7885,26 @@ async def extract_and_update_neon_record(
         extracted_text = ""
         chunks = []
         
-        # Step 1: Call /api/file/extract-text endpoint to extract text
-        async with httpx.AsyncClient() as client:
-            form_data = {
-                'file_url': file_url,
-                'file_name': file_name
-            }
-            response = await client.post(
-                'http://localhost:8000/api/file/extract-text',
-                data=form_data,
-                timeout=120.0
-            )
-            
-            if response.status_code == 200:
-                result = response.json()
-                extracted_text = result.get('extracted_text', '')
-                chunks = result.get('chunks', [extracted_text] if extracted_text else [])
-                logger.info(f"Extracted {len(extracted_text)} chars, {len(chunks)} chunks from {file_name}")
-                update_file_status(file_id, "extracted", f"Extracted {len(chunks)} chunks from file", 40)
-            else:
-                error_detail = response.text
-                logger.error(f"Extract-text endpoint failed: {error_detail}")
-                extracted_text = f"[Extraction failed: {error_detail}]"
-                chunks = [extracted_text]
-                update_file_status(file_id, "failed", f"Text extraction failed: {error_detail}", 0)
+        # Step 1: Extract text directly using BackgroundTextProcessor (avoid localhost HTTP call)
+        processor = get_background_processor()
+        if not processor:
+            raise Exception("Background processor not initialized")
+        
+        # Download file
+        file_bytes = await processor.download_file(file_url)
+        if not file_bytes:
+            raise Exception("Empty file downloaded")
+        
+        # Extract text
+        extracted_text = await processor.extract_text(file_bytes, file_name)
+        
+        if not extracted_text or not extracted_text.strip():
+            raise Exception("No text content found in file")
+        
+        # Chunk the text
+        chunks = processor.chunk_text(extracted_text, chunk_size=1500, chunk_overlap=200)
+        logger.info(f"Extracted {len(extracted_text)} chars, {len(chunks)} chunks from {file_name}")
+        update_file_status(file_id, "extracted", f"Extracted {len(chunks)} chunks from file", 40)
         
         # Step 2: Generate embeddings using OpenRouter API
         async def generate_embedding(text: str) -> str:
