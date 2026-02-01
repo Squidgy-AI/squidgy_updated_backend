@@ -5755,15 +5755,16 @@ async def extract_facebook_oauth_params(request: FacebookOAuthRequest):
     This endpoint is used by the chat window in the frontend to generate
     Facebook OAuth URLs for solar sales specialists to connect their Facebook accounts.
 
-    Note: The userId passed here should be firm_user_id, and we'll look up the ghl_location_id and agency_user_id from the database.
-    For Facebook OAuth, locationId uses ghl_location_id and userId uses agency_user_id (extracted from Firebase token).
+    Note: The userId passed here should be firm_user_id, and we'll look up the ghl_location_id and soma_ghl_user_id from the database.
+    For Facebook OAuth start URL: locationId uses ghl_location_id, userId uses soma_ghl_user_id (created during subaccount setup).
+    For Facebook accounts API: Uses agency_user_id (extracted from Firebase token during automation).
     """
     try:
         logger.info(f"🔍 Extracting Facebook OAuth params for location: {request.locationId}, firm_user_id: {request.userId}")
 
-        # Look up the ghl_location_id and agency_user_id from the ghl_subaccounts table
+        # Look up the ghl_location_id and soma_ghl_user_id from the ghl_subaccounts table
         ghl_result = supabase.table('ghl_subaccounts').select(
-            'ghl_location_id, agency_user_id'
+            'ghl_location_id, soma_ghl_user_id'
         ).eq('firm_user_id', request.userId).execute()
 
         if not ghl_result.data or not ghl_result.data[0].get('ghl_location_id'):
@@ -5771,13 +5772,18 @@ async def extract_facebook_oauth_params(request: FacebookOAuthRequest):
             raise HTTPException(status_code=404, detail="GHL location not found. Please complete GHL setup first.")
 
         ghl_location_id = ghl_result.data[0]['ghl_location_id']
-        agency_user_id = ghl_result.data[0].get('agency_user_id') or 'k2uP8MkaoPU3Xas79npg'  # Default fallback
+        soma_ghl_user_id = ghl_result.data[0].get('soma_ghl_user_id')
+
+        if not soma_ghl_user_id:
+            logger.error(f"❌ No soma_ghl_user_id found for firm_user_id: {request.userId}")
+            raise HTTPException(status_code=404, detail="GHL user not created. Please complete GHL setup first.")
 
         logger.info(f"✅ Found ghl_location_id: {ghl_location_id} for firm_user_id: {request.userId}")
-        logger.info(f"✅ Using agency_user_id: {agency_user_id} for userId parameter")
+        logger.info(f"✅ Using soma_ghl_user_id: {soma_ghl_user_id} for OAuth userId parameter")
 
-        # Use ghl_location_id for locationId and agency_user_id for userId
-        result = await FacebookOAuthExtractor.extract_params(ghl_location_id, agency_user_id)
+        # Use ghl_location_id for locationId and soma_ghl_user_id for userId
+        # NOTE: agency_user_id is used for Facebook accounts API endpoint, NOT OAuth start URL
+        result = await FacebookOAuthExtractor.extract_params(ghl_location_id, soma_ghl_user_id)
         
         logger.info(f"✅ Successfully extracted Facebook OAuth parameters")
         logger.info(f"   Client ID: {result['params'].get('client_id', 'NOT_FOUND')}")
@@ -5805,22 +5811,26 @@ async def start_oauth_with_interception(request: dict, background_tasks: Backgro
         
         print(f"[OAUTH INTERCEPTION] 🚀 Starting OAuth with token interception for user: {firm_user_id}")
 
-        # Get GHL location ID and agency_user_id
+        # Get GHL location ID and soma_ghl_user_id
         ghl_result = supabase.table('ghl_subaccounts').select(
-            'ghl_location_id, agency_user_id'
+            'ghl_location_id, soma_ghl_user_id'
         ).eq('firm_user_id', firm_user_id).execute()
 
         if not ghl_result.data or not ghl_result.data[0].get('ghl_location_id'):
             raise HTTPException(status_code=404, detail="GHL location not found. Please complete GHL setup first.")
 
         ghl_location_id = ghl_result.data[0]['ghl_location_id']
-        agency_user_id = ghl_result.data[0].get('agency_user_id') or 'k2uP8MkaoPU3Xas79npg'  # Default fallback
+        soma_ghl_user_id = ghl_result.data[0].get('soma_ghl_user_id')
+
+        if not soma_ghl_user_id:
+            raise HTTPException(status_code=404, detail="GHL user not created. Please complete GHL setup first.")
 
         print(f"[OAUTH INTERCEPTION] ✅ Found location_id: {ghl_location_id}")
-        print(f"[OAUTH INTERCEPTION] ✅ Using agency_user_id: {agency_user_id}")
+        print(f"[OAUTH INTERCEPTION] ✅ Using soma_ghl_user_id: {soma_ghl_user_id} for OAuth start URL")
 
-        # Generate OAuth URL with correct user_id
-        result = await FacebookOAuthExtractor.extract_params(ghl_location_id, agency_user_id)
+        # Generate OAuth URL with soma_ghl_user_id (NOT agency_user_id)
+        # NOTE: agency_user_id is used for Facebook accounts API endpoint, NOT OAuth start URL
+        result = await FacebookOAuthExtractor.extract_params(ghl_location_id, soma_ghl_user_id)
         
         if not result.get('success') or not result.get('params'):
             raise HTTPException(status_code=500, detail="Failed to generate OAuth URL")
