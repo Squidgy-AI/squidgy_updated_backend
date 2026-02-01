@@ -534,6 +534,22 @@ request_cache: Dict[str, float] = {}
 _connections_lock = threading.Lock()
 _requests_lock = threading.Lock()
 
+# File processing status store for SSE streaming
+# Key: file_id, Value: {status, message, progress, updated_at}
+file_processing_status: Dict[str, Dict[str, Any]] = {}
+_file_status_lock = threading.Lock()
+
+def update_file_status(file_id: str, status: str, message: str, progress: int = 0):
+    """Update file processing status for SSE streaming"""
+    with _file_status_lock:
+        file_processing_status[file_id] = {
+            "status": status,
+            "message": message,
+            "progress": progress,
+            "updated_at": datetime.utcnow().isoformat()
+        }
+        logger.info(f"File {file_id} status: {status} - {message} ({progress}%)")
+
 # Environment variables
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
@@ -7766,6 +7782,9 @@ async def save_file_knowledge(
             agent_id
         )
         
+        # Initialize file status for SSE streaming
+        update_file_status(file_id, "uploading", "File uploaded, starting processing...", 10)
+        
         return {
             "success": True,
             "message": "File uploaded to knowledge base successfully",
@@ -7782,6 +7801,47 @@ async def save_file_knowledge(
     finally:
         if conn:
             await conn.close()
+
+
+@app.get("/api/file/status-stream/{file_id}")
+async def stream_file_status(file_id: str):
+    """
+    SSE endpoint to stream file processing status updates.
+    Frontend subscribes to this after uploading a file.
+    """
+    async def event_generator():
+        last_status = None
+        timeout_counter = 0
+        max_timeout = 300  # 5 minutes max
+        
+        while timeout_counter < max_timeout:
+            with _file_status_lock:
+                current_status = file_processing_status.get(file_id)
+            
+            if current_status and current_status != last_status:
+                last_status = current_status
+                yield f"data: {json.dumps(current_status)}\n\n"
+                
+                # If completed or failed, end the stream
+                if current_status.get("status") in ["completed", "failed"]:
+                    break
+            
+            await asyncio.sleep(1)
+            timeout_counter += 1
+        
+        # Send final timeout message if we hit the limit
+        if timeout_counter >= max_timeout:
+            yield f"data: {json.dumps({'status': 'timeout', 'message': 'Processing timeout', 'progress': 0})}\n\n"
+    
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
 
 
 async def extract_and_update_neon_record(
@@ -7810,6 +7870,7 @@ async def extract_and_update_neon_record(
     conn = None
     try:
         logger.info(f"Starting text extraction for file {file_id}: {file_name}")
+        update_file_status(file_id, "extracting", "Extracting text from file...", 20)
         
         extracted_text = ""
         chunks = []
@@ -7831,11 +7892,13 @@ async def extract_and_update_neon_record(
                 extracted_text = result.get('extracted_text', '')
                 chunks = result.get('chunks', [extracted_text] if extracted_text else [])
                 logger.info(f"Extracted {len(extracted_text)} chars, {len(chunks)} chunks from {file_name}")
+                update_file_status(file_id, "extracted", f"Extracted {len(chunks)} chunks from file", 40)
             else:
                 error_detail = response.text
                 logger.error(f"Extract-text endpoint failed: {error_detail}")
                 extracted_text = f"[Extraction failed: {error_detail}]"
                 chunks = [extracted_text]
+                update_file_status(file_id, "failed", f"Text extraction failed: {error_detail}", 0)
         
         # Step 2: Generate embeddings using OpenRouter API
         async def generate_embedding(text: str) -> str:
@@ -7891,6 +7954,8 @@ async def extract_and_update_neon_record(
         # Step 4: Update original record with first chunk and embedding
         total_chunks = len(chunks)
         if chunks:
+            update_file_status(file_id, "embedding", f"Generating embeddings for {total_chunks} chunks...", 50)
+            
             # Format document like n8n: "File: {fileName} [Part X/Y]\n\n{chunk}"
             first_chunk_text = chunks[0] if chunks[0].strip() else ""
             formatted_doc = f"File: {file_name} [Part 1/{total_chunks}]\n\n{first_chunk_text}"
@@ -7978,11 +8043,16 @@ async def extract_and_update_neon_record(
                         )
                     
                     logger.info(f"Inserted chunk {i}/{total_chunks} for file {file_id}")
+                    # Update progress for each chunk
+                    progress = 50 + int((i / total_chunks) * 40)
+                    update_file_status(file_id, "saving", f"Saving chunk {i}/{total_chunks}...", progress)
         
         logger.info(f"Successfully processed file {file_id}: {len(chunks)} chunks with embeddings")
+        update_file_status(file_id, "completed", f"Successfully processed {total_chunks} chunks", 100)
         
     except Exception as e:
         logger.error(f"Background extraction failed for {file_id}: {str(e)}")
+        update_file_status(file_id, "failed", f"Processing failed: {str(e)}", 0)
         # Try to update record with error message
         try:
             if not conn:
