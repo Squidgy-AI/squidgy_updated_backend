@@ -56,7 +56,7 @@ async def get_ghl_tokens(firm_user_id: str, agent_id: str = "SOL"):
 
         # Get all tokens from ghl_subaccounts table
         ghl_result = supabase.table('ghl_subaccounts')\
-            .select('ghl_location_id, "Firebase Token", "PIT_Token", soma_ghl_user_id, access_token')\
+            .select('ghl_location_id, "Firebase Token", "PIT_Token", soma_ghl_user_id, agency_user_id, access_token')\
             .eq('firm_user_id', firm_user_id)\
             .eq('agent_id', agent_id)\
             .single()\
@@ -72,7 +72,8 @@ async def get_ghl_tokens(firm_user_id: str, agent_id: str = "SOL"):
             'location_id': ghl_result.data.get('ghl_location_id'),
             'firebase_token': ghl_result.data.get('Firebase Token'),
             'access_token': ghl_result.data.get('access_token') or ghl_result.data.get('PIT_Token'),
-            'ghl_user_id': ghl_result.data.get('soma_ghl_user_id')
+            'soma_ghl_user_id': ghl_result.data.get('soma_ghl_user_id'),  # Reference only
+            'agency_user_id': ghl_result.data.get('agency_user_id')  # For API calls
         }
     except Exception as e:
         logger.error(f"Error fetching GHL tokens: {e}")
@@ -94,23 +95,23 @@ async def start_facebook_oauth(request: StartOAuthRequest):
         # Get GHL credentials
         tokens = await get_ghl_tokens(request.firm_user_id, request.agent_id)
 
-        if not tokens or not tokens.get('location_id') or not tokens.get('ghl_user_id'):
+        if not tokens or not tokens.get('location_id') or not tokens.get('agency_user_id'):
             raise HTTPException(
                 status_code=404,
                 detail="GHL account not found or missing required data"
             )
 
         location_id = tokens['location_id']
-        ghl_user_id = tokens['ghl_user_id']
+        agency_user_id = tokens['agency_user_id']  # Use agency_user_id for API calls
 
-        # Construct OAuth URL
-        oauth_url = f"https://backend.leadconnectorhq.com/social-media-posting/oauth/facebook/start?locationId={location_id}&userId={ghl_user_id}"
+        # Construct OAuth URL with agency_user_id (NOT soma_ghl_user_id)
+        oauth_url = f"https://backend.leadconnectorhq.com/social-media-posting/oauth/facebook/start?locationId={location_id}&userId={agency_user_id}"
 
         return {
             "success": True,
             "oauth_url": oauth_url,
             "location_id": location_id,
-            "user_id": ghl_user_id
+            "user_id": agency_user_id  # Return agency_user_id
         }
 
     except HTTPException:

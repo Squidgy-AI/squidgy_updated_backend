@@ -5751,32 +5751,33 @@ class FacebookOAuthExtractor:
 async def extract_facebook_oauth_params(request: FacebookOAuthRequest):
     """
     Extract Facebook OAuth parameters from GHL service for Squidgy chat integration
-    
+
     This endpoint is used by the chat window in the frontend to generate
     Facebook OAuth URLs for solar sales specialists to connect their Facebook accounts.
-    
-    Note: The userId passed here should be firm_user_id, and we'll look up the ghl_location_id from the database.
-    For Facebook OAuth, both locationId and userId parameters must be the same ghl_location_id value.
+
+    Note: The userId passed here should be firm_user_id, and we'll look up the ghl_location_id and agency_user_id from the database.
+    For Facebook OAuth, locationId uses ghl_location_id and userId uses agency_user_id (extracted from Firebase token).
     """
     try:
         logger.info(f"🔍 Extracting Facebook OAuth params for location: {request.locationId}, firm_user_id: {request.userId}")
-        
-        # Look up the ghl_location_id from the ghl_subaccounts table
+
+        # Look up the ghl_location_id and agency_user_id from the ghl_subaccounts table
         ghl_result = supabase.table('ghl_subaccounts').select(
-            'ghl_location_id'
+            'ghl_location_id, agency_user_id'
         ).eq('firm_user_id', request.userId).execute()
-        
+
         if not ghl_result.data or not ghl_result.data[0].get('ghl_location_id'):
             logger.error(f"❌ No GHL location found for firm_user_id: {request.userId}")
             raise HTTPException(status_code=404, detail="GHL location not found. Please complete GHL setup first.")
-        
+
         ghl_location_id = ghl_result.data[0]['ghl_location_id']
-        
+        agency_user_id = ghl_result.data[0].get('agency_user_id') or 'k2uP8MkaoPU3Xas79npg'  # Default fallback
+
         logger.info(f"✅ Found ghl_location_id: {ghl_location_id} for firm_user_id: {request.userId}")
-        logger.info(f"🔄 Using same location_id for both locationId and userId parameters")
-        
-        # Use the same ghl_location_id for BOTH locationId and userId parameters
-        result = await FacebookOAuthExtractor.extract_params(ghl_location_id, ghl_location_id)
+        logger.info(f"✅ Using agency_user_id: {agency_user_id} for userId parameter")
+
+        # Use ghl_location_id for locationId and agency_user_id for userId
+        result = await FacebookOAuthExtractor.extract_params(ghl_location_id, agency_user_id)
         
         logger.info(f"✅ Successfully extracted Facebook OAuth parameters")
         logger.info(f"   Client ID: {result['params'].get('client_id', 'NOT_FOUND')}")
@@ -5803,21 +5804,23 @@ async def start_oauth_with_interception(request: dict, background_tasks: Backgro
             raise HTTPException(status_code=400, detail="firm_user_id is required")
         
         print(f"[OAUTH INTERCEPTION] 🚀 Starting OAuth with token interception for user: {firm_user_id}")
-        
-        # Get GHL location ID
+
+        # Get GHL location ID and agency_user_id
         ghl_result = supabase.table('ghl_subaccounts').select(
-            'ghl_location_id'
+            'ghl_location_id, agency_user_id'
         ).eq('firm_user_id', firm_user_id).execute()
-        
+
         if not ghl_result.data or not ghl_result.data[0].get('ghl_location_id'):
             raise HTTPException(status_code=404, detail="GHL location not found. Please complete GHL setup first.")
-        
+
         ghl_location_id = ghl_result.data[0]['ghl_location_id']
-        
+        agency_user_id = ghl_result.data[0].get('agency_user_id') or 'k2uP8MkaoPU3Xas79npg'  # Default fallback
+
         print(f"[OAUTH INTERCEPTION] ✅ Found location_id: {ghl_location_id}")
-        
-        # Generate OAuth URL
-        result = await FacebookOAuthExtractor.extract_params(ghl_location_id, ghl_location_id)
+        print(f"[OAUTH INTERCEPTION] ✅ Using agency_user_id: {agency_user_id}")
+
+        # Generate OAuth URL with correct user_id
+        result = await FacebookOAuthExtractor.extract_params(ghl_location_id, agency_user_id)
         
         if not result.get('success') or not result.get('params'):
             raise HTTPException(status_code=500, detail="Failed to generate OAuth URL")
