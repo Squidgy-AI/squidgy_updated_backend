@@ -90,14 +90,15 @@ async def start_instagram_oauth(request: StartOAuthRequest):
         # Get GHL credentials
         tokens = await get_ghl_tokens(request.firm_user_id, request.agent_id)
 
-        if not tokens or not tokens.get('location_id') or not tokens.get('agency_user_id'):
+        if not tokens or not tokens.get('location_id'):
             raise HTTPException(
                 status_code=404,
                 detail="GHL account not found or missing required data"
             )
 
         location_id = tokens['location_id']
-        agency_user_id = tokens['agency_user_id']  # Use agency_user_id for API calls
+        # Use agency_user_id from database, or default to k2uP8MkaoPU3Xas79npg (never changes for the login email)
+        agency_user_id = tokens.get('agency_user_id') or 'k2uP8MkaoPU3Xas79npg'
 
         # Construct OAuth URL with agency_user_id (NOT soma_ghl_user_id)
         oauth_url = f"https://backend.leadconnectorhq.com/social-media-posting/oauth/instagram/start?locationId={location_id}&userId={agency_user_id}&loginType=instagram"
