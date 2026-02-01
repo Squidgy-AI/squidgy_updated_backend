@@ -162,12 +162,12 @@ async def get_connected_facebook_accounts(request: StartOAuthRequest):
         logger.info(f"[SOCIAL FB] Fetching connected accounts for location: {location_id}")
 
         # Call GHL API to get all accounts
+        # NOTE: Using token-id ONLY (no authorization header needed - verified via testing)
         async with httpx.AsyncClient() as client:
             response = await client.get(
                 f"https://backend.leadconnectorhq.com/social-media-posting/{location_id}/accounts",
                 params={"fetchAll": "true"},
                 headers={
-                    "authorization": f"Bearer {access_token}",
                     "token-id": firebase_token,
                     "version": "2021-07-28",
                     "channel": "APP",
@@ -247,11 +247,11 @@ async def get_available_facebook_pages(request: GetPagesRequest):
             )
 
         # Call GHL API to get available pages
+        # NOTE: Using token-id ONLY (no authorization header needed - verified via testing)
         async with httpx.AsyncClient() as client:
             response = await client.get(
                 f"https://backend.leadconnectorhq.com/social-media-posting/oauth/{location_id}/facebook/accounts/{request.oauth_id}",
                 headers={
-                    "authorization": f"Bearer {access_token}",
                     "token-id": firebase_token,
                     "version": "2021-07-28",
                     "channel": "APP",
@@ -339,12 +339,12 @@ async def connect_facebook_page(request: ConnectPageRequest):
         }
 
         # Call GHL API to connect the page
+        # NOTE: Using token-id ONLY (no authorization header needed - verified via testing)
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 f"https://backend.leadconnectorhq.com/social-media-posting/oauth/{location_id}/facebook/accounts/{request.oauth_id}",
                 json=connect_body,
                 headers={
-                    "authorization": f"Bearer {access_token}",
                     "token-id": firebase_token,
                     "version": "2021-07-28",
                     "channel": "APP",

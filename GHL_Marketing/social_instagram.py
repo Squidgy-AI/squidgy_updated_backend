@@ -155,12 +155,12 @@ async def get_connected_instagram_accounts(request: StartOAuthRequest):
             )
 
         # Call GHL API to get all accounts
+        # NOTE: Using token-id ONLY (no authorization header needed - verified via testing)
         async with httpx.AsyncClient() as client:
             response = await client.get(
                 f"https://backend.leadconnectorhq.com/social-media-posting/{location_id}/accounts",
                 params={"fetchAll": "true"},
                 headers={
-                    "authorization": f"Bearer {access_token}",
                     "token-id": firebase_token,
                     "version": "2021-07-28",
                     "channel": "APP",
@@ -231,11 +231,11 @@ async def get_available_instagram_accounts(request: GetAccountsRequest):
             )
 
         # Call GHL API to get available accounts
+        # NOTE: Using token-id ONLY (no authorization header needed - verified via testing)
         async with httpx.AsyncClient() as client:
             response = await client.get(
                 f"https://backend.leadconnectorhq.com/social-media-posting/oauth/{location_id}/instagram/accounts/{request.oauth_id}",
                 headers={
-                    "authorization": f"Bearer {access_token}",
                     "token-id": firebase_token,
                     "version": "2021-07-28",
                     "channel": "APP",
@@ -339,12 +339,12 @@ async def connect_instagram_account(request: ConnectAccountRequest):
         }
 
         # Call GHL API to connect the account
+        # NOTE: Using token-id ONLY (no authorization header needed - verified via testing)
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 f"https://backend.leadconnectorhq.com/social-media-posting/oauth/{location_id}/instagram/accounts/{request.oauth_id}",
                 json=connect_body,
                 headers={
-                    "authorization": f"Bearer {access_token}",
                     "token-id": firebase_token,
                     "version": "2021-07-28",
                     "channel": "APP",
