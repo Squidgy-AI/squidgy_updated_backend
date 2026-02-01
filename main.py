@@ -5622,8 +5622,8 @@ async def get_ghl_status(ghl_record_id: str):
                 "soma_user_created_at": ghl_data.get('soma_user_created_at'),
                 "creation_error": ghl_data.get('creation_error'),
                 "automation_error": ghl_data.get('automation_error'),
-                "pit_token_available": bool(ghl_data.get('PIT_Token')),
-                "pit_token_preview": ghl_data.get('PIT_Token')[:30] + "..." if ghl_data.get('PIT_Token') else None
+                "pit_token_available": bool(ghl_data.get('pit_token')),
+                "pit_token_preview": ghl_data.get('pit_token')[:30] + "..." if ghl_data.get('pit_token') else None
             },
             "facebook_status": None,
             "overall_status": ghl_data['creation_status'],
@@ -6456,12 +6456,12 @@ async def get_pages_from_integration(request: dict):
         if not pit_token or not location_id:
             print(f"[FB PAGES] No tokens in facebook_integrations, checking ghl_subaccounts...")
             ghl_result = supabase.table('ghl_subaccounts').select(
-                'ghl_location_id, PIT_Token'
+                'ghl_location_id, pit_token'
             ).eq('firm_user_id', firm_user_id).execute()
-            
+
             if ghl_result.data and len(ghl_result.data) > 0:
                 location_id = ghl_result.data[0].get('ghl_location_id')
-                pit_token = ghl_result.data[0].get('PIT_Token')
+                pit_token = ghl_result.data[0].get('pit_token')
                 print(f"[FB PAGES] Using PIT token from ghl_subaccounts for location: {location_id}")
             else:
                 raise HTTPException(status_code=404, detail="No GHL account found. Please complete GHL setup first.")
@@ -6491,11 +6491,11 @@ async def get_pages_from_integration(request: dict):
         if not firebase_token:
             print(f"[FB PAGES] No firebase_token in facebook_integrations, checking ghl_subaccounts...")
             ghl_result = supabase.table('ghl_subaccounts').select(
-                '"Firebase Token"'
+                'firebase_token'
             ).eq('firm_user_id', firm_user_id).execute()
-            
+
             if ghl_result.data and len(ghl_result.data) > 0:
-                firebase_token = ghl_result.data[0].get('Firebase Token')
+                firebase_token = ghl_result.data[0].get('firebase_token')
                 print(f"[FB PAGES] Using Firebase token from ghl_subaccounts")
         
         if not firebase_token:
@@ -7281,19 +7281,19 @@ async def refresh_firebase_token(request: dict, background_tasks: BackgroundTask
         
         # Get current token and timestamp from ghl_subaccounts
         ghl_result = supabase.table('ghl_subaccounts').select(
-            'id, ghl_location_id, soma_ghl_email, soma_ghl_password, "Firebase Token", "firebase token time", automation_status'
+            'id, ghl_location_id, soma_ghl_email, soma_ghl_password, firebase_token, firebase_token_time, automation_status'
         ).eq('firm_user_id', firm_user_id).execute()
-        
+
         if not ghl_result.data:
             raise HTTPException(
                 status_code=404,
                 detail="No GHL subaccount found. Please complete setup first."
             )
-        
+
         ghl_record = ghl_result.data[0]
         location_id = ghl_record.get('ghl_location_id')
-        current_token = ghl_record.get('Firebase Token')
-        token_time = ghl_record.get('firebase token time')
+        current_token = ghl_record.get('firebase_token')
+        token_time = ghl_record.get('firebase_token_time')
         soma_email = ghl_record.get('soma_ghl_email')
         soma_password = ghl_record.get('soma_ghl_password')
         automation_status = ghl_record.get('automation_status')
