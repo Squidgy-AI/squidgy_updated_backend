@@ -5141,17 +5141,91 @@ async def run_ghl_creation_background(
         
         soma_user_id = soma_user_response.get("user_id")
         print(f"[GHL BACKGROUND] ✅ Soma user created with ID: {soma_user_id}")
-        
-        # Update database with Soma user creation success
-        supabase.table('ghl_subaccounts').update({
-            'soma_ghl_user_id': soma_user_id,
-            'soma_ghl_email': soma_unique_email,
-            'soma_ghl_password': "Dummy@123",
-            'soma_user_created_at': datetime.now().isoformat(),
-            'creation_status': 'created',
-            'automation_status': 'ready',
-            'updated_at': datetime.now().isoformat()
-        }).eq('id', ghl_record_id).execute()
+
+        # CRITICAL: Authenticate as soma_ghl_user to get their firebase_token
+        # We need the soma_ghl_user's firebase_token (not agency user's) for social media API calls
+        print(f"[GHL BACKGROUND] 🔥 Authenticating as soma_ghl_user to get firebase_token...")
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                auth_response = await client.post(
+                    "https://backend.leadconnectorhq.com/users/authenticate",
+                    json={
+                        "email": soma_unique_email,
+                        "password": "Dummy@123"
+                    }
+                )
+
+                if auth_response.status_code == 200:
+                    auth_data = auth_response.json()
+                    soma_firebase_token = auth_data.get('firebase_token')
+                    soma_access_token = auth_data.get('access_token')
+
+                    print(f"[GHL BACKGROUND] ✅ Got soma_ghl_user tokens!")
+                    print(f"[GHL BACKGROUND] 🔥 firebase_token: {soma_firebase_token[:30] if soma_firebase_token else 'N/A'}...")
+                    print(f"[GHL BACKGROUND] 🔑 access_token: {soma_access_token[:30] if soma_access_token else 'N/A'}...")
+
+                    # Decode firebase_token to extract agency_user_id
+                    agency_user_id = None
+                    if soma_firebase_token:
+                        try:
+                            import base64
+                            import json
+                            parts = soma_firebase_token.split('.')
+                            if len(parts) >= 2:
+                                payload_part = parts[1]
+                                padding = 4 - len(payload_part) % 4
+                                if padding != 4:
+                                    payload_part += '=' * padding
+                                payload_json = base64.urlsafe_b64decode(payload_part)
+                                payload = json.loads(payload_json)
+                                agency_user_id = payload.get('user_id')
+                                print(f"[GHL BACKGROUND] 👤 Extracted agency_user_id: {agency_user_id}")
+                        except Exception as decode_error:
+                            print(f"[GHL BACKGROUND] ⚠️ Could not decode firebase_token: {decode_error}")
+
+                    # Update database with Soma user creation + tokens
+                    supabase.table('ghl_subaccounts').update({
+                        'soma_ghl_user_id': soma_user_id,
+                        'soma_ghl_email': soma_unique_email,
+                        'soma_ghl_password': "Dummy@123",
+                        'soma_user_created_at': datetime.now().isoformat(),
+                        'creation_status': 'created',
+                        'automation_status': 'ready',
+                        # CRITICAL: Save soma_ghl_user's tokens (not agency user's)
+                        'firebase_token': soma_firebase_token,
+                        'firebase_token_time': datetime.now().isoformat(),
+                        'access_token': soma_access_token,
+                        'agency_user_id': agency_user_id,
+                        'updated_at': datetime.now().isoformat()
+                    }).eq('id', ghl_record_id).execute()
+
+                    print(f"[GHL BACKGROUND] ✅ Saved soma_ghl_user tokens to database!")
+                else:
+                    print(f"[GHL BACKGROUND] ❌ Authentication failed: {auth_response.status_code} - {auth_response.text}")
+                    # Still update database with user creation (without tokens)
+                    supabase.table('ghl_subaccounts').update({
+                        'soma_ghl_user_id': soma_user_id,
+                        'soma_ghl_email': soma_unique_email,
+                        'soma_ghl_password': "Dummy@123",
+                        'soma_user_created_at': datetime.now().isoformat(),
+                        'creation_status': 'created',
+                        'automation_status': 'ready',
+                        'updated_at': datetime.now().isoformat()
+                    }).eq('id', ghl_record_id).execute()
+
+        except Exception as auth_error:
+            print(f"[GHL BACKGROUND] ❌ Error authenticating soma_ghl_user: {auth_error}")
+            # Still update database with user creation (without tokens)
+            supabase.table('ghl_subaccounts').update({
+                'soma_ghl_user_id': soma_user_id,
+                'soma_ghl_email': soma_unique_email,
+                'soma_ghl_password': "Dummy@123",
+                'soma_user_created_at': datetime.now().isoformat(),
+                'creation_status': 'created',
+                'automation_status': 'ready',
+                'updated_at': datetime.now().isoformat()
+            }).eq('id', ghl_record_id).execute()
         
         # Step 3: Start PIT Token automation background task
         print(f"[GHL BACKGROUND] 🔑 Starting PIT Token automation...")
