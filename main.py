@@ -5227,16 +5227,22 @@ async def run_ghl_creation_background(
                 'updated_at': datetime.now().isoformat()
             }).eq('id', ghl_record_id).execute()
         
-        # Step 3: Start PIT Token automation background task
-        print(f"[GHL BACKGROUND] 🔑 Starting PIT Token automation...")
-        asyncio.create_task(run_pit_token_automation(
-            ghl_record_id=ghl_record_id,
-            location_id=location_id,
-            email=soma_unique_email,
-            password="Dummy@123",
-            firm_user_id=user_id,
-            ghl_user_id=soma_user_id
-        ))
+        # Step 3: PIT Token automation - COMMENTED OUT (NOT NEEDED)
+        # We removed authorization header from all social media API calls
+        # Only firebase_token is needed, which we already have from soma_ghl_user authentication
+        # PIT token is not used anywhere in the codebase anymore
+        print(f"[GHL BACKGROUND] ⏭️  Skipping PIT Token automation (not needed - using firebase_token only)")
+        # asyncio.create_task(run_pit_token_automation(
+        #     ghl_record_id=ghl_record_id,
+        #     location_id=location_id,
+        #     email=soma_unique_email,
+        #     password="Dummy@123",
+        #     firm_user_id=user_id,
+        #     ghl_user_id=soma_user_id
+        # ))
+
+        # Mark automation as completed since we already have firebase_token
+        print(f"[GHL BACKGROUND] ✅ Automation already completed (firebase_token captured)")
         
         # Step 4: Create Facebook integration record
         facebook_record_id = str(uuid.uuid4())
@@ -5621,21 +5627,24 @@ async def trigger_pit_automation(ghl_record_id: str):
         if not ghl_data.get('soma_ghl_password'):
             raise HTTPException(status_code=400, detail="Soma password not found in record")
         
-        # Start PIT automation
-        asyncio.create_task(run_pit_token_automation(
-            ghl_record_id=ghl_record_id,
-            location_id=ghl_data['ghl_location_id'],
-            email=ghl_data['soma_ghl_email'],
-            password=ghl_data['soma_ghl_password'],
-            firm_user_id=ghl_data['firm_user_id'],
-            ghl_user_id=ghl_data.get('soma_ghl_user_id')
-        ))
-        
-        print(f"[MANUAL PIT] ✅ PIT automation task started")
-        
+        # PIT automation - COMMENTED OUT (NOT NEEDED)
+        # We removed authorization header from all social media API calls
+        # Only firebase_token is needed, which is already captured during user creation
+        print(f"[MANUAL PIT] ⏭️  PIT automation no longer needed (using firebase_token only)")
+        # asyncio.create_task(run_pit_token_automation(
+        #     ghl_record_id=ghl_record_id,
+        #     location_id=ghl_data['ghl_location_id'],
+        #     email=ghl_data['soma_ghl_email'],
+        #     password=ghl_data['soma_ghl_password'],
+        #     firm_user_id=ghl_data['firm_user_id'],
+        #     ghl_user_id=ghl_data.get('soma_ghl_user_id')
+        # ))
+
+        print(f"[MANUAL PIT] ℹ️  firebase_token is already available from user creation")
+
         return {
-            "status": "started",
-            "message": "PIT token automation started successfully",
+            "status": "skipped",
+            "message": "PIT token automation no longer needed - using firebase_token only",
             "ghl_record_id": ghl_record_id,
             "location_id": ghl_data['ghl_location_id'],
             "check_status_endpoint": f"/api/ghl/status/{ghl_record_id}",
