@@ -87,24 +87,34 @@ class DeleteResponse(BaseModel):
 # Database Connection
 # ============================================================================
 
-async def get_db_connection():
-    """Create and return a connection to the Neon database"""
+async def get_db_connection(max_retries: int = 3, retry_delay: float = 1.0):
+    """Create and return a connection to the Neon database with retry logic"""
+    import asyncio
+    
     if not all([NEON_DB_HOST, NEON_DB_USER, NEON_DB_PASSWORD]):
         raise HTTPException(status_code=500, detail="Database configuration missing")
 
-    try:
-        conn = await asyncpg.connect(
-            host=NEON_DB_HOST,
-            port=int(NEON_DB_PORT),
-            user=NEON_DB_USER,
-            password=NEON_DB_PASSWORD,
-            database=NEON_DB_NAME,
-            ssl='require'
-        )
-        return conn
-    except Exception as e:
-        logger.error(f"Failed to connect to Neon database: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Database connection failed: {str(e)}")
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            conn = await asyncpg.connect(
+                host=NEON_DB_HOST,
+                port=int(NEON_DB_PORT),
+                user=NEON_DB_USER,
+                password=NEON_DB_PASSWORD,
+                database=NEON_DB_NAME,
+                ssl='require',
+                timeout=30
+            )
+            return conn
+        except Exception as e:
+            last_error = e
+            logger.warning(f"Database connection attempt {attempt + 1}/{max_retries} failed: {str(e)}")
+            if attempt < max_retries - 1:
+                await asyncio.sleep(retry_delay * (attempt + 1))  # Exponential backoff
+    
+    logger.error(f"Failed to connect to Neon database after {max_retries} attempts: {str(last_error)}")
+    raise HTTPException(status_code=500, detail=f"Database connection failed: {str(last_error)}")
 
 
 # ============================================================================
@@ -534,17 +544,22 @@ async def upload_file(
 # ============================================================================
 
 @router.delete("/file/{file_id}", response_model=DeleteResponse)
-async def delete_file(file_id: str):
+async def delete_file(file_id: str, file_url: Optional[str] = None):
     """
-    Delete file and all its chunks from Neon database
+    Delete file and all its chunks from Neon database and Supabase storage
 
     Args:
         file_id: The UUID of the file record
+        file_url: Optional file URL for storage deletion (used if DB record already deleted)
 
     Returns:
         DeleteResponse with success status
     """
     conn = None
+    db_file_url = None
+    user_id = None
+    agent_id = None
+    
     try:
         conn = await get_db_connection()
 
@@ -557,32 +572,71 @@ async def delete_file(file_id: str):
 
         file_result = await conn.fetchrow(file_query, file_id)
 
-        if not file_result:
-            raise HTTPException(status_code=404, detail="File not found")
+        if file_result:
+            db_file_url = file_result['file_url']
+            user_id = file_result['user_id']
+            agent_id = file_result['agent_id']
+        
+        # Use provided file_url if DB record not found
+        storage_url = db_file_url or file_url
+        
+        # Delete from Supabase storage first
+        if storage_url:
+            try:
+                supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+                # URL format: https://xxx.supabase.co/storage/v1/object/public/agentkbs/knowledge-base/userId/agentName/filename
+                # Bucket is always 'agentkbs', path starts after bucket name
+                # Remove query string from URL if present
+                clean_url = storage_url.split('?')[0]
+                logger.info(f"File URL for deletion: {clean_url}")
+                url_parts = clean_url.split('/')
+                logger.info(f"URL parts: {url_parts}")
+                
+                if 'agentkbs' in url_parts:
+                    bucket_index = url_parts.index('agentkbs')
+                    storage_path = '/'.join(url_parts[bucket_index + 1:])
+                    logger.info(f"Deleting from Supabase storage bucket 'agentkbs': {storage_path}")
+                    result = supabase.storage.from_('agentkbs').remove([storage_path])
+                    logger.info(f"Supabase delete result: {result}")
+                    logger.info(f"Successfully deleted file from Supabase storage")
+                else:
+                    logger.warning(f"Could not find 'agentkbs' bucket in URL: {clean_url}")
+            except Exception as storage_error:
+                logger.warning(f"Failed to delete from Supabase storage: {storage_error}")
+                import traceback
+                logger.warning(f"Traceback: {traceback.format_exc()}")
+                # Continue with database deletion even if storage fails
+        else:
+            logger.warning(f"No file URL available for storage deletion")
 
-        file_url = file_result['file_url']
-        user_id = file_result['user_id']
-        agent_id = file_result['agent_id']
+        # Delete from database if record exists
+        if db_file_url and user_id and agent_id:
+            # Delete all chunks with same file_url (multiple chunks per file)
+            delete_query = """
+                DELETE FROM user_vector_knowledge_base
+                WHERE user_id = $1
+                  AND agent_id = $2
+                  AND file_url = $3
+            """
 
-        # Delete all chunks with same file_url (multiple chunks per file)
-        delete_query = """
-            DELETE FROM user_vector_knowledge_base
-            WHERE user_id = $1
-              AND agent_id = $2
-              AND file_url = $3
-        """
+            result = await conn.execute(delete_query, user_id, agent_id, db_file_url)
 
-        result = await conn.execute(delete_query, user_id, agent_id, file_url)
+            # Extract number of deleted rows
+            deleted_count = int(result.split()[-1])
 
-        # Extract number of deleted rows
-        deleted_count = int(result.split()[-1])
+            logger.info(f"Deleted file {file_id} and {deleted_count} chunks for user {user_id}, agent {agent_id}")
 
-        logger.info(f"Deleted file {file_id} and {deleted_count} chunks for user {user_id}, agent {agent_id}")
-
-        return DeleteResponse(
-            success=True,
-            message=f"File and {deleted_count} chunks deleted successfully"
-        )
+            return DeleteResponse(
+                success=True,
+                message=f"File and {deleted_count} chunks deleted successfully"
+            )
+        else:
+            # DB record not found, but we may have deleted from storage
+            logger.info(f"File {file_id} not found in database, storage deletion attempted")
+            return DeleteResponse(
+                success=True,
+                message="File not found in database, storage cleanup attempted"
+            )
 
     except HTTPException:
         raise
