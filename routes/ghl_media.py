@@ -33,18 +33,18 @@ async def get_ghl_credentials(user_id: str, agent_id: str = 'social_media_schedu
     """
     try:
         result = supabase.table('ghl_subaccounts')\
-            .select('ghl_location_id, PIT_Token')\
+            .select('ghl_location_id, pit_token')\
             .eq('firm_user_id', user_id)\
             .eq('agent_id', agent_id)\
             .single()\
             .execute()
-        
+
         if not result.data:
             return None
-            
+
         return {
             'location_id': result.data.get('ghl_location_id'),
-            'bearer_token': result.data.get('PIT_Token')
+            'bearer_token': result.data.get('pit_token')
         }
     except Exception as e:
         logger.error(f"Error fetching GHL credentials: {e}")

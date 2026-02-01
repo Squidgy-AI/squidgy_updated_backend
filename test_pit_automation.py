@@ -53,14 +53,14 @@ async def test_pit_automation():
         supabase: Client = create_client(supabase_url, supabase_key)
         print("✅ Connected to Supabase")
         
-        # Check current PIT_Token status
-        print("\n📊 Checking current PIT_Token status...")
-        result = supabase.table('ghl_subaccounts').select('PIT_Token, automation_status').eq('id', ghl_record_id).single().execute()
+        # Check current pit_token status
+        print("\n📊 Checking current pit_token status...")
+        result = supabase.table('ghl_subaccounts').select('pit_token, automation_status').eq('id', ghl_record_id).single().execute()
         
         if result.data:
-            current_pit = result.data.get('PIT_Token')
+            current_pit = result.data.get('pit_token')
             current_status = result.data.get('automation_status')
-            print(f"   Current PIT_Token: {current_pit[:30] + '...' if current_pit else 'NULL'}")
+            print(f"   Current pit_token: {current_pit[:30] + '...' if current_pit else 'NULL'}")
             print(f"   Current Status: {current_status}")
         else:
             print("❌ ERROR: GHL record not found")
@@ -117,10 +117,10 @@ async def test_pit_automation():
                 print(f"🎉 PIT Token: {pit_token[:30]}...")
                 print(f"📏 Token Length: {len(pit_token)} characters")
                 
-                # Update ghl_subaccounts with PIT_Token
+                # Update ghl_subaccounts with pit_token
                 print("\n💾 Updating ghl_subaccounts table...")
                 supabase.table('ghl_subaccounts').update({
-                    'PIT_Token': pit_token,
+                    'pit_token': pit_token,
                     'automation_status': 'pit_completed'
                 }).eq('id', ghl_record_id).execute()
                 
@@ -128,15 +128,15 @@ async def test_pit_automation():
                 
                 # Verify the update
                 print("\n🔍 Verifying database update...")
-                verify_result = supabase.table('ghl_subaccounts').select('PIT_Token, automation_status').eq('id', ghl_record_id).single().execute()
+                verify_result = supabase.table('ghl_subaccounts').select('pit_token, automation_status').eq('id', ghl_record_id).single().execute()
                 
                 if verify_result.data:
-                    saved_pit = verify_result.data.get('PIT_Token')
+                    saved_pit = verify_result.data.get('pit_token')
                     saved_status = verify_result.data.get('automation_status')
                     
                     if saved_pit == pit_token:
                         print("✅ VERIFICATION SUCCESSFUL!")
-                        print(f"   PIT_Token in DB: {saved_pit[:30]}...")
+                        print(f"   pit_token in DB: {saved_pit[:30]}...")
                         print(f"   Status in DB: {saved_status}")
                     else:
                         print("❌ VERIFICATION FAILED: Token mismatch!")
