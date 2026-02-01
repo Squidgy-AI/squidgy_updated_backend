@@ -7652,56 +7652,125 @@ async def save_text_knowledge(
 @app.post("/api/knowledge-base/file")
 async def save_file_knowledge(
     background_tasks: BackgroundTasks,
-    firm_user_id: str = Form(...),
-    file_name: str = Form(...),
-    file_url: str = Form(...),
+    file: UploadFile = File(...),
+    user_id: str = Form(...),
     agent_id: str = Form(...),
     agent_name: str = Form(...)
 ):
     """
-    Save file upload to knowledge base and process in background
+    Upload file to Supabase storage and save metadata to Neon database.
+    Background task extracts text and updates the record.
     
     Parameters:
-    - firm_user_id: User ID
-    - file_name: Original filename
-    - file_url: Supabase storage URL
+    - file: The uploaded file
+    - user_id: User ID
     - agent_id: Agent ID from YAML config
     - agent_name: Agent name from YAML config
     
     Returns:
     - Immediate response with file_id for tracking
     """
+    import asyncpg
+    
+    # Neon database configuration
+    NEON_DB_HOST = os.getenv('NEON_DB_HOST')
+    NEON_DB_PORT = os.getenv('NEON_DB_PORT', '5432')
+    NEON_DB_USER = os.getenv('NEON_DB_USER')
+    NEON_DB_PASSWORD = os.getenv('NEON_DB_PASSWORD')
+    NEON_DB_NAME = os.getenv('NEON_DB_NAME', 'neondb')
+    
+    conn = None
     try:
-        logger.info(f"Saving file knowledge for user {firm_user_id}: {file_name}")
+        file_name = file.filename or f"file_{uuid.uuid4().hex[:8]}"
+        logger.info(f"Uploading file for user {user_id}: {file_name}")
         
         # Validate required fields
-        if not all([firm_user_id, file_name, file_url, agent_id, agent_name]):
+        if not all([user_id, agent_id, agent_name]):
             raise HTTPException(status_code=400, detail="All fields are required")
         
-        # Create processing record in knowledge base table
-        result = await file_processing_service.create_processing_record(
-            firm_user_id=firm_user_id,
-            file_name=file_name,
-            file_url=file_url,
-            agent_id=agent_id,
-            agent_name=agent_name
+        # Read file content
+        file_content = await file.read()
+        
+        # Generate unique storage path
+        unique_id = uuid.uuid4().hex[:12]
+        storage_path = f"knowledge-base/{user_id}/{agent_id}/{unique_id}_{file_name}"
+        
+        # Upload to Supabase storage (agentkbs bucket)
+        try:
+            response = supabase.storage.from_('agentkbs').upload(
+                storage_path,
+                file_content,
+                {
+                    "content-type": file.content_type or "application/octet-stream",
+                    "upsert": "false"
+                }
+            )
+            
+            # Check for upload errors
+            if hasattr(response, 'error') and response.error:
+                raise HTTPException(status_code=500, detail=f"Storage upload failed: {response.error}")
+                
+        except Exception as upload_error:
+            if "already exists" not in str(upload_error):
+                logger.error(f"Supabase upload error: {str(upload_error)}")
+                raise HTTPException(status_code=500, detail=f"Failed to upload file: {str(upload_error)}")
+        
+        # Get public URL
+        file_url = supabase.storage.from_('agentkbs').get_public_url(storage_path)
+        
+        # Save metadata to Neon database (user_vector_knowledge_base table)
+        if not all([NEON_DB_HOST, NEON_DB_USER, NEON_DB_PASSWORD]):
+            raise HTTPException(status_code=500, detail="Neon database configuration missing")
+        
+        conn = await asyncpg.connect(
+            host=NEON_DB_HOST,
+            port=int(NEON_DB_PORT),
+            user=NEON_DB_USER,
+            password=NEON_DB_PASSWORD,
+            database=NEON_DB_NAME,
+            ssl='require'
         )
         
-        if not result["success"]:
-            logger.error(f"Failed to create knowledge base record: {result['error']}")
-            raise HTTPException(status_code=500, detail=f"Failed to create record: {result['error']}")
+        query = """
+            INSERT INTO user_vector_knowledge_base
+            (user_id, agent_id, document, category, source, file_name, file_url, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            RETURNING id
+        """
         
-        file_id = result["file_id"]
-        logger.info(f"Created knowledge base record: {file_id}")
+        created_at = datetime.utcnow()
         
-        # Start background text extraction
-        processor = get_background_processor()
-        background_tasks.add_task(processor.process_file, file_id)
+        result = await conn.fetchrow(
+            query,
+            user_id,
+            agent_id,
+            f"File uploaded: {file_name} (processing...)",  # Placeholder until extraction
+            'documents',
+            'file_upload',
+            file_name,
+            file_url,
+            created_at,
+            created_at
+        )
+        
+        file_id = str(result['id'])
+        logger.info(f"Created Neon knowledge base record: {file_id}")
+        
+        # Start background text extraction that will update the Neon record
+        background_tasks.add_task(
+            extract_and_update_neon_record,
+            file_id,
+            file_url,
+            file_name,
+            user_id,
+            agent_id
+        )
         
         return {
             "success": True,
             "message": "File uploaded to knowledge base successfully",
             "file_id": file_id,
+            "file_url": file_url,
             "processing_status": "pending"
         }
         
@@ -7710,6 +7779,232 @@ async def save_file_knowledge(
     except Exception as e:
         logger.error(f"Error saving file knowledge: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if conn:
+            await conn.close()
+
+
+async def extract_and_update_neon_record(
+    file_id: str,
+    file_url: str,
+    file_name: str,
+    user_id: str,
+    agent_id: str
+):
+    """
+    Background task to:
+    1. Extract text from file using /api/file/extract-text endpoint
+    2. Generate embeddings using OpenRouter API
+    3. Save text and embeddings to user_vector_knowledge_base in Neon
+    """
+    import asyncpg
+    import httpx
+    
+    NEON_DB_HOST = os.getenv('NEON_DB_HOST')
+    NEON_DB_PORT = os.getenv('NEON_DB_PORT', '5432')
+    NEON_DB_USER = os.getenv('NEON_DB_USER')
+    NEON_DB_PASSWORD = os.getenv('NEON_DB_PASSWORD')
+    NEON_DB_NAME = os.getenv('NEON_DB_NAME', 'neondb')
+    OPENROUTER_API_KEY = os.getenv('OPENROUTER_API_KEY')
+    
+    conn = None
+    try:
+        logger.info(f"Starting text extraction for file {file_id}: {file_name}")
+        
+        extracted_text = ""
+        chunks = []
+        
+        # Step 1: Call /api/file/extract-text endpoint to extract text
+        async with httpx.AsyncClient() as client:
+            form_data = {
+                'file_url': file_url,
+                'file_name': file_name
+            }
+            response = await client.post(
+                'http://localhost:8000/api/file/extract-text',
+                data=form_data,
+                timeout=120.0
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                extracted_text = result.get('extracted_text', '')
+                chunks = result.get('chunks', [extracted_text] if extracted_text else [])
+                logger.info(f"Extracted {len(extracted_text)} chars, {len(chunks)} chunks from {file_name}")
+            else:
+                error_detail = response.text
+                logger.error(f"Extract-text endpoint failed: {error_detail}")
+                extracted_text = f"[Extraction failed: {error_detail}]"
+                chunks = [extracted_text]
+        
+        # Step 2: Generate embeddings using OpenRouter API
+        async def generate_embedding(text: str) -> str:
+            """Generate embedding for text using OpenRouter API, returns formatted string for PostgreSQL vector"""
+            if not OPENROUTER_API_KEY:
+                logger.warning("OPENROUTER_API_KEY not set, skipping embedding generation")
+                return None
+            
+            try:
+                logger.info(f"Generating embedding for text ({len(text)} chars)...")
+                async with httpx.AsyncClient() as client:
+                    response = await client.post(
+                        'https://openrouter.ai/api/v1/embeddings',
+                        headers={
+                            'Authorization': f'Bearer {OPENROUTER_API_KEY}',
+                            'Content-Type': 'application/json'
+                        },
+                        json={
+                            'model': 'openai/text-embedding-3-small',
+                            'input': text[:8000]  # Limit input size
+                        },
+                        timeout=60.0
+                    )
+                    
+                    if response.status_code == 200:
+                        result = response.json()
+                        embedding = result.get('data', [{}])[0].get('embedding', [])
+                        if embedding and len(embedding) > 0:
+                            # Format as PostgreSQL vector string: [0.1, 0.2, ...]
+                            vector_str = '[' + ','.join(str(x) for x in embedding) + ']'
+                            logger.info(f"Generated embedding with {len(embedding)} dimensions")
+                            return vector_str
+                        else:
+                            logger.error(f"OpenRouter returned empty embedding")
+                            return None
+                    else:
+                        logger.error(f"OpenRouter embedding failed ({response.status_code}): {response.text}")
+                        return None
+            except Exception as e:
+                logger.error(f"Embedding generation error: {str(e)}")
+                return None
+        
+        # Step 3: Connect to Neon database
+        conn = await asyncpg.connect(
+            host=NEON_DB_HOST,
+            port=int(NEON_DB_PORT),
+            user=NEON_DB_USER,
+            password=NEON_DB_PASSWORD,
+            database=NEON_DB_NAME,
+            ssl='require'
+        )
+        
+        # Step 4: Update original record with first chunk and embedding
+        total_chunks = len(chunks)
+        if chunks:
+            # Format document like n8n: "File: {fileName} [Part X/Y]\n\n{chunk}"
+            first_chunk_text = chunks[0] if chunks[0].strip() else ""
+            formatted_doc = f"File: {file_name} [Part 1/{total_chunks}]\n\n{first_chunk_text}"
+            
+            embedding = await generate_embedding(first_chunk_text)
+            
+            if embedding:
+                # Update with text and embedding
+                update_query = """
+                    UPDATE user_vector_knowledge_base
+                    SET document = $1, embedding = $2::vector, updated_at = $3
+                    WHERE id = $4::uuid
+                """
+                await conn.execute(
+                    update_query,
+                    formatted_doc,
+                    embedding,
+                    datetime.utcnow(),
+                    file_id
+                )
+                logger.info(f"Updated record {file_id} with embedding")
+            else:
+                # Update with text only (no embedding)
+                update_query = """
+                    UPDATE user_vector_knowledge_base
+                    SET document = $1, updated_at = $2
+                    WHERE id = $3::uuid
+                """
+                await conn.execute(
+                    update_query,
+                    formatted_doc,
+                    datetime.utcnow(),
+                    file_id
+                )
+                logger.warning(f"Updated record {file_id} WITHOUT embedding (generation failed)")
+            
+            logger.info(f"Updated original record {file_id} with chunk 1/{total_chunks}")
+            
+            # Step 5: Insert additional chunks as new records
+            if len(chunks) > 1:
+                for i, chunk in enumerate(chunks[1:], start=2):
+                    if not chunk.strip():
+                        continue
+                    
+                    # Format document like n8n
+                    formatted_chunk = f"File: {file_name} [Part {i}/{total_chunks}]\n\n{chunk}"
+                    chunk_embedding = await generate_embedding(chunk)
+                    
+                    if chunk_embedding:
+                        insert_query = """
+                            INSERT INTO user_vector_knowledge_base
+                            (user_id, agent_id, document, embedding, category, source, file_name, file_url, created_at, updated_at)
+                            VALUES ($1, $2, $3, $4::vector, $5, $6, $7, $8, $9, $10)
+                        """
+                        await conn.execute(
+                            insert_query,
+                            user_id,
+                            agent_id,
+                            formatted_chunk,
+                            chunk_embedding,
+                            'documents',
+                            'file_upload',
+                            file_name,
+                            file_url,
+                            datetime.utcnow(),
+                            datetime.utcnow()
+                        )
+                    else:
+                        insert_query = """
+                            INSERT INTO user_vector_knowledge_base
+                            (user_id, agent_id, document, category, source, file_name, file_url, created_at, updated_at)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                        """
+                        await conn.execute(
+                            insert_query,
+                            user_id,
+                            agent_id,
+                            formatted_chunk,
+                            'documents',
+                            'file_upload',
+                            file_name,
+                            file_url,
+                            datetime.utcnow(),
+                            datetime.utcnow()
+                        )
+                    
+                    logger.info(f"Inserted chunk {i}/{total_chunks} for file {file_id}")
+        
+        logger.info(f"Successfully processed file {file_id}: {len(chunks)} chunks with embeddings")
+        
+    except Exception as e:
+        logger.error(f"Background extraction failed for {file_id}: {str(e)}")
+        # Try to update record with error message
+        try:
+            if not conn:
+                conn = await asyncpg.connect(
+                    host=NEON_DB_HOST,
+                    port=int(NEON_DB_PORT),
+                    user=NEON_DB_USER,
+                    password=NEON_DB_PASSWORD,
+                    database=NEON_DB_NAME,
+                    ssl='require'
+                )
+            await conn.execute(
+                """UPDATE user_vector_knowledge_base SET document = $1, updated_at = $2 WHERE id = $3::uuid""",
+                f"[Extraction failed: {str(e)}]",
+                datetime.utcnow(),
+                file_id
+            )
+        except:
+            pass
+    finally:
+        if conn:
+            await conn.close()
 
 @app.get("/api/knowledge-base/{agent_id}")
 async def get_agent_knowledge(agent_id: str, firm_user_id: Optional[str] = None):

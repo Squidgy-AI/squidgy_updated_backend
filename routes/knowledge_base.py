@@ -6,10 +6,12 @@ Handles CRUD operations for user knowledge base in Neon database (user_vector_kn
 import os
 import logging
 from typing import List, Dict, Any, Optional
-from fastapi import APIRouter, HTTPException, Body
+from fastapi import APIRouter, HTTPException, Body, UploadFile, File, Form
 from pydantic import BaseModel
 import asyncpg
 from datetime import datetime
+from supabase import create_client, Client
+import uuid as uuid_lib
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +23,16 @@ NEON_DB_PORT = os.getenv('NEON_DB_PORT', '5432')
 NEON_DB_USER = os.getenv('NEON_DB_USER')
 NEON_DB_PASSWORD = os.getenv('NEON_DB_PASSWORD')
 NEON_DB_NAME = os.getenv('NEON_DB_NAME', 'neondb')
+
+# Supabase configuration
+SUPABASE_URL = os.getenv('SUPABASE_URL')
+SUPABASE_SERVICE_KEY = os.getenv('SUPABASE_SERVICE_KEY')
+
+def get_supabase_client() -> Client:
+    """Create and return a Supabase client"""
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        raise HTTPException(status_code=500, detail="Supabase configuration missing")
+    return create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
 # ============================================================================
 # Pydantic Models
@@ -56,6 +68,14 @@ class SaveFileRequest(BaseModel):
     agent_name: str
     file_name: str
     file_url: str
+
+
+class FileUploadResponse(BaseModel):
+    success: bool
+    message: str
+    file_id: Optional[str] = None
+    file_url: Optional[str] = None
+    processing_status: Optional[str] = None
 
 
 class DeleteResponse(BaseModel):
@@ -126,9 +146,10 @@ async def get_user_files(user_id: str, agent_id: str):
         conn = await get_db_connection()
 
         # Query for files - deduplicate by file_url (multiple chunks per file)
+        # Use MIN(id::text)::uuid since MIN() doesn't work directly on UUID type
         query = """
             SELECT
-                MIN(id) as file_id,
+                (MIN(id::text))::uuid as file_id,
                 file_name,
                 file_url,
                 MAX(created_at) as created_at,
@@ -404,26 +425,68 @@ async def update_instructions(file_id: str, request: UpdateInstructionsRequest =
 
 
 # ============================================================================
-# POST FILE - Save file metadata (text extraction happens in n8n)
+# POST FILE - Upload file to Supabase and save metadata to Neon
 # ============================================================================
 
-@router.post("/file")
-async def save_file(request: SaveFileRequest = Body(...)):
+@router.post("/file", response_model=FileUploadResponse)
+async def upload_file(
+    file: UploadFile = File(...),
+    user_id: str = Form(...),
+    agent_id: str = Form(...),
+    agent_name: str = Form(...)
+):
     """
-    Save file metadata to Neon database
-    Text extraction and embedding generation happens via n8n workflow
+    Upload file to Supabase storage and save metadata to Neon database.
+    Text extraction and embedding generation happens via n8n workflow.
 
     Args:
-        request: SaveFileRequest with user_id, agent_id, agent_name, file_name, file_url
+        file: The uploaded file
+        user_id: The user's UUID
+        agent_id: The agent's ID (e.g., 'personal_assistant')
+        agent_name: The agent's display name
 
     Returns:
-        Success response with file_id
+        FileUploadResponse with file_id and file_url
     """
     conn = None
     try:
+        # Get Supabase client
+        supabase = get_supabase_client()
+        
+        # Read file content
+        file_content = await file.read()
+        file_name = file.filename or f"file_{uuid_lib.uuid4()}"
+        
+        # Generate unique storage path
+        unique_id = str(uuid_lib.uuid4())
+        storage_path = f"knowledge-base/{user_id}/{agent_id}/{unique_id}_{file_name}"
+        
+        # Upload to Supabase storage
+        try:
+            response = supabase.storage.from_('knowledge-base').upload(
+                storage_path,
+                file_content,
+                {
+                    "content-type": file.content_type or "application/octet-stream",
+                    "upsert": "false"
+                }
+            )
+            
+            # Check for upload errors
+            if hasattr(response, 'error') and response.error:
+                raise HTTPException(status_code=500, detail=f"Storage upload failed: {response.error}")
+                
+        except Exception as upload_error:
+            if "already exists" not in str(upload_error):
+                logger.error(f"Supabase upload error: {str(upload_error)}")
+                raise HTTPException(status_code=500, detail=f"Failed to upload file: {str(upload_error)}")
+        
+        # Get public URL
+        file_url = supabase.storage.from_('knowledge-base').get_public_url(storage_path)
+        
+        # Save metadata to Neon database
         conn = await get_db_connection()
 
-        # Insert file metadata (n8n will extract text and add embeddings later)
         query = """
             INSERT INTO user_vector_knowledge_base
             (user_id, agent_id, document, category, source, file_name, file_url, created_at, updated_at)
@@ -435,27 +498,28 @@ async def save_file(request: SaveFileRequest = Body(...)):
 
         result = await conn.fetchrow(
             query,
-            request.user_id,
-            request.agent_id,
-            f"File uploaded: {request.file_name}",  # Placeholder until extraction
+            user_id,
+            agent_id,
+            f"File uploaded: {file_name}",  # Placeholder until extraction
             'documents',
             'file_upload',
-            request.file_name,
-            request.file_url,
+            file_name,
+            file_url,
             created_at,
             created_at
         )
 
         file_id = str(result['id'])
 
-        logger.info(f"Saved file metadata for user {request.user_id}, agent {request.agent_id}: {request.file_name} (file_id: {file_id})")
+        logger.info(f"Uploaded file for user {user_id}, agent {agent_id}: {file_name} (file_id: {file_id})")
 
-        return {
-            "success": True,
-            "message": "File metadata saved successfully",
-            "file_id": file_id,
-            "processing_status": "pending"
-        }
+        return FileUploadResponse(
+            success=True,
+            message="File uploaded successfully",
+            file_id=file_id,
+            file_url=file_url,
+            processing_status="pending"
+        )
 
     except Exception as e:
         logger.error(f"Error saving file metadata: {str(e)}")
