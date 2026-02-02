@@ -5233,7 +5233,7 @@ async def run_ghl_creation_background(
         print(f"[GHL BACKGROUND] 🌐 Triggering BackgroundAutomationUser1 to capture firebase_token via browser...")
 
         try:
-            automation_service_url = os.getenv('BACKGROUND_AUTOMATION_SERVICE_URL', 'https://backgroundautomationuser1-6dc76c81eef5.herokuapp.com')
+            automation_service_url = os.getenv('AUTOMATION_USER1_SERVICE_URL', 'https://backgroundautomationuser1-1644057ede7b.herokuapp.com')
 
             async with httpx.AsyncClient(timeout=300.0) as client:
                 automation_response = await client.post(
@@ -5718,7 +5718,7 @@ async def refresh_ghl_tokens(firm_user_id: str, agent_id: str = "SOL"):
         # Call BackgroundAutomationUser1 service to capture tokens
         print(f"[TOKEN REFRESH] 📞 Calling BackgroundAutomationUser1 service...")
 
-        automation_service_url = os.getenv('BACKGROUND_AUTOMATION_SERVICE_URL', 'https://backgroundautomationuser1-6dc76c81eef5.herokuapp.com')
+        automation_service_url = os.getenv('AUTOMATION_USER1_SERVICE_URL', 'https://backgroundautomationuser1-1644057ede7b.herokuapp.com')
 
         async with httpx.AsyncClient(timeout=300.0) as client:
             automation_response = await client.post(
