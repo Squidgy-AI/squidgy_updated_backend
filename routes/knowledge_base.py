@@ -287,9 +287,9 @@ async def create_instructions(request: SaveInstructionsRequest = Body(...)):
     try:
         conn = await get_db_connection()
 
-        # Chunk text if longer than 1000 characters
+        # Chunk text if longer than 1536 characters
         text = request.instructions.strip()
-        chunk_size = 1000
+        chunk_size = 1536
         chunks = [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)] if len(text) > chunk_size else [text]
 
         created_at = datetime.utcnow()
@@ -386,7 +386,7 @@ async def update_instructions(file_id: str, request: UpdateInstructionsRequest =
 
         # Insert new chunks
         text = request.instructions.strip()
-        chunk_size = 1000
+        chunk_size = 1536
         chunks = [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)] if len(text) > chunk_size else [text]
 
         created_at = datetime.utcnow()
