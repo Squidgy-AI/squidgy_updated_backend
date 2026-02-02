@@ -5682,21 +5682,95 @@ async def trigger_pit_automation(ghl_record_id: str):
         logger.error(f"Error triggering PIT automation: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/api/ghl/refresh-tokens/{firm_user_id}")
+async def refresh_ghl_tokens(firm_user_id: str, agent_id: str = "SOL"):
+    """
+    Manually refresh firebase_token for existing users
+    This triggers the BackgroundAutomationUser1 service to capture tokens via browser automation
+    """
+    try:
+        print(f"[TOKEN REFRESH] 🔄 Starting token refresh for user: {firm_user_id}")
+
+        # Get GHL subaccount details
+        ghl_result = supabase.table('ghl_subaccounts')\
+            .select('*')\
+            .eq('firm_user_id', firm_user_id)\
+            .eq('agent_id', agent_id)\
+            .single()\
+            .execute()
+
+        if not ghl_result.data:
+            raise HTTPException(status_code=404, detail="GHL subaccount not found")
+
+        ghl_data = ghl_result.data
+        location_id = ghl_data.get('ghl_location_id')
+        soma_email = ghl_data.get('soma_ghl_email')
+        soma_password = ghl_data.get('soma_ghl_password')
+        soma_user_id = ghl_data.get('soma_ghl_user_id')
+
+        if not all([location_id, soma_email, soma_password]):
+            raise HTTPException(status_code=400, detail="Missing GHL credentials")
+
+        # Update status to indicate refresh is running
+        supabase.table('ghl_subaccounts').update({
+            'automation_status': 'token_refresh_running',
+            'updated_at': datetime.now().isoformat()
+        }).eq('firm_user_id', firm_user_id).eq('agent_id', agent_id).execute()
+
+        # Call BackgroundAutomationUser1 service to capture tokens
+        print(f"[TOKEN REFRESH] 📞 Calling BackgroundAutomationUser1 service...")
+
+        automation_service_url = os.getenv('BACKGROUND_AUTOMATION_SERVICE_URL', 'https://backgroundautomationuser1-6dc76c81eef5.herokuapp.com')
+
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            automation_response = await client.post(
+                f"{automation_service_url}/ghl-complete-task",
+                json={
+                    "location_id": location_id,
+                    "email": soma_email,
+                    "password": soma_password,
+                    "firm_user_id": firm_user_id,
+                    "agent_id": agent_id,
+                    "ghl_user_id": soma_user_id
+                }
+            )
+
+            if automation_response.status_code != 200:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Automation service error: {automation_response.text}"
+                )
+
+        print(f"[TOKEN REFRESH] ✅ Token refresh started successfully")
+
+        return {
+            "success": True,
+            "message": "Token refresh started. Tokens will be captured via browser automation.",
+            "status": "running",
+            "firm_user_id": firm_user_id
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[TOKEN REFRESH] Error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/api/ghl/user/{user_id}/integrations")
 async def get_user_ghl_integrations(user_id: str):
     """Get all GHL integrations for a user by firm_user_id"""
     try:
         print(f"[GHL INTEGRATIONS] 📊 Fetching integrations for user: {user_id}")
-        
+
         # Get all GHL subaccounts for this user using firm_user_id
         ghl_result = supabase.table('ghl_subaccounts')\
             .select('*')\
             .eq('firm_user_id', user_id)\
             .execute()
-        
+
         if not ghl_result.data:
             return {"integrations": [], "message": "No GHL integrations found for this user"}
-        
+
         return {
             "integrations": ghl_result.data,
             "count": len(ghl_result.data)

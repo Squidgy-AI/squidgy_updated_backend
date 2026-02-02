@@ -151,12 +151,12 @@ async def get_connected_facebook_accounts(request: StartOAuthRequest):
 
         location_id = tokens['location_id']
         firebase_token = tokens['firebase_token']
-        access_token = tokens['access_token']
 
-        if not location_id or not firebase_token or not access_token:
+        if not location_id or not firebase_token:
+            # Provide helpful error message for users without tokens
             raise HTTPException(
                 status_code=400,
-                detail="Missing required tokens"
+                detail="Missing firebase_token. Please refresh your GHL connection. Call POST /api/ghl/refresh-tokens/{firm_user_id} to fix this."
             )
 
         logger.info(f"[SOCIAL FB] Fetching connected accounts for location: {location_id}")
@@ -238,12 +238,12 @@ async def get_available_facebook_pages(request: GetPagesRequest):
 
         location_id = tokens['location_id']
         firebase_token = tokens['firebase_token']
-        access_token = tokens['access_token']
 
-        if not location_id or not firebase_token or not access_token:
+        if not location_id or not firebase_token:
+            # Provide helpful error message for users without tokens
             raise HTTPException(
                 status_code=400,
-                detail="Missing required tokens"
+                detail="Missing firebase_token. Please refresh your GHL connection. Call POST /api/ghl/refresh-tokens/{firm_user_id} to fix this."
             )
 
         # Call GHL API to get available pages
@@ -321,12 +321,12 @@ async def connect_facebook_page(request: ConnectPageRequest):
 
         location_id = tokens['location_id']
         firebase_token = tokens['firebase_token']
-        access_token = tokens['access_token']
 
-        if not location_id or not firebase_token or not access_token:
+        if not location_id or not firebase_token:
+            # Provide helpful error message for users without tokens
             raise HTTPException(
                 status_code=400,
-                detail="Missing required tokens"
+                detail="Missing firebase_token. Please refresh your GHL connection. Call POST /api/ghl/refresh-tokens/{firm_user_id} to fix this."
             )
 
         # Prepare request body
