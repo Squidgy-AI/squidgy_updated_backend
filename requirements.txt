@@ -40,3 +40,5 @@ safety==2.3.5
 
 # System monitoring
 psutil==5.9.6
+
+twilio==8.10.0

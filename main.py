@@ -17,10 +17,11 @@ from typing import Dict, Any, Optional, List, Set
 # Third-party imports
 import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, BackgroundTasks, UploadFile, File, Form, Request, Header
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, BackgroundTasks, UploadFile, File, Form, Request, Header, Response
 from starlette.websockets import WebSocketState
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, HTMLResponse
+from twilio.twiml.messaging_response import MessagingResponse as TwilioMessagingResponse
 # from openai import OpenAI
 from pydantic import BaseModel
 from supabase import create_client, Client
@@ -8639,6 +8640,43 @@ except Exception as e:
 
 # ============================================================================
 # END MCP INTEGRATION
+# ============================================================================
+
+# ============================================================================
+# TWILIO SMS WEBHOOK
+# ============================================================================
+
+@app.post("/api/webhooks/twilio/sms")
+async def receive_twilio_sms(request: Request):
+    """
+    Twilio SMS Webhook Endpoint
+    Receives incoming SMS messages from Twilio and returns a TwiML response.
+    Configure this URL in your Twilio phone number settings.
+    """
+    try:
+        form_data = await request.form()
+        from_number = form_data.get("From")
+        to_number = form_data.get("To")
+        body = form_data.get("Body")
+        message_sid = form_data.get("MessageSid")
+        
+        logger.info(f"Received SMS from {from_number} to {to_number}: {body}")
+        print(f"📱 New SMS from {from_number}: {body}")
+        
+        # Create TwiML response
+        resp = TwilioMessagingResponse()
+        resp.message("Message received 👍")
+        
+        return Response(content=str(resp), media_type="application/xml")
+        
+    except Exception as e:
+        logger.error(f"Error processing Twilio SMS webhook: {str(e)}")
+        # Return empty TwiML response on error
+        resp = TwilioMessagingResponse()
+        return Response(content=str(resp), media_type="application/xml")
+
+# ============================================================================
+# END TWILIO SMS WEBHOOK
 # ============================================================================
 
 app.add_middleware(
