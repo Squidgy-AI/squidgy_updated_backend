@@ -5220,6 +5220,7 @@ async def run_ghl_creation_background(
         # We need the soma_ghl_user's firebase_token (not agency user's) for social media API calls
         print(f"[GHL BACKGROUND] 🔥 Authenticating as soma_ghl_user to get firebase_token...")
 
+        firebase_token_captured = False
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 auth_response = await client.post(
@@ -5275,48 +5276,77 @@ async def run_ghl_creation_background(
                     }).eq('id', ghl_record_id).execute()
 
                     print(f"[GHL BACKGROUND] ✅ Saved soma_ghl_user tokens to database!")
+                    # Mark that we successfully got firebase_token
+                    firebase_token_captured = True
                 else:
-                    print(f"[GHL BACKGROUND] ❌ Authentication failed: {auth_response.status_code} - {auth_response.text}")
-                    # Still update database with user creation (without tokens)
+                    print(f"[GHL BACKGROUND] ❌ Authentication API failed: {auth_response.status_code} - {auth_response.text}")
+                    print(f"[GHL BACKGROUND] 🔄 Will trigger browser automation to capture firebase_token...")
+                    # Update database with user creation (without tokens yet)
                     supabase.table('ghl_subaccounts').update({
                         'soma_ghl_user_id': soma_user_id,
                         'soma_ghl_email': soma_unique_email,
                         'soma_ghl_password': "Dummy@123",
                         'soma_user_created_at': datetime.now().isoformat(),
                         'creation_status': 'created',
-                        'automation_status': 'ready',
+                        'automation_status': 'pending_token_capture',
                         'updated_at': datetime.now().isoformat()
                     }).eq('id', ghl_record_id).execute()
+                    firebase_token_captured = False
 
         except Exception as auth_error:
             print(f"[GHL BACKGROUND] ❌ Error authenticating soma_ghl_user: {auth_error}")
-            # Still update database with user creation (without tokens)
+            print(f"[GHL BACKGROUND] 🔄 Will trigger browser automation to capture firebase_token...")
+            # Update database with user creation (without tokens yet)
             supabase.table('ghl_subaccounts').update({
                 'soma_ghl_user_id': soma_user_id,
                 'soma_ghl_email': soma_unique_email,
                 'soma_ghl_password': "Dummy@123",
                 'soma_user_created_at': datetime.now().isoformat(),
                 'creation_status': 'created',
-                'automation_status': 'ready',
+                'automation_status': 'pending_token_capture',
                 'updated_at': datetime.now().isoformat()
             }).eq('id', ghl_record_id).execute()
-        
-        # Step 3: PIT Token automation - COMMENTED OUT (NOT NEEDED)
-        # We removed authorization header from all social media API calls
-        # Only firebase_token is needed, which we already have from soma_ghl_user authentication
-        # PIT token is not used anywhere in the codebase anymore
-        print(f"[GHL BACKGROUND] ⏭️  Skipping PIT Token automation (not needed - using firebase_token only)")
-        # asyncio.create_task(run_pit_token_automation(
-        #     ghl_record_id=ghl_record_id,
-        #     location_id=location_id,
-        #     email=soma_unique_email,
-        #     password="Dummy@123",
-        #     firm_user_id=user_id,
-        #     ghl_user_id=soma_user_id
-        # ))
+            firebase_token_captured = False
 
-        # Mark automation as completed since we already have firebase_token
-        print(f"[GHL BACKGROUND] ✅ Automation already completed (firebase_token captured)")
+        # Step 3: Firebase token capture via browser automation (if API auth failed)
+        if not firebase_token_captured:
+            print(f"[GHL BACKGROUND] 🌐 Triggering BackgroundAutomationUser1 to capture firebase_token via browser...")
+            try:
+                automation_service_url = os.getenv('BACKGROUND_AUTOMATION_SERVICE_URL', 'https://backgroundautomationuser1-6dc76c81eef5.herokuapp.com')
+
+                async with httpx.AsyncClient(timeout=300.0) as client:
+                    automation_response = await client.post(
+                        f"{automation_service_url}/ghl-complete-task",
+                        json={
+                            "location_id": location_id,
+                            "email": soma_unique_email,
+                            "password": "Dummy@123",
+                            "firm_user_id": user_id,
+                            "agent_id": "SOL",
+                            "ghl_user_id": soma_user_id
+                        }
+                    )
+
+                    if automation_response.status_code == 200:
+                        print(f"[GHL BACKGROUND] ✅ Browser automation triggered successfully!")
+                    else:
+                        print(f"[GHL BACKGROUND] ⚠️ Browser automation trigger failed: {automation_response.status_code}")
+                        # Set status to show manual token refresh needed
+                        supabase.table('ghl_subaccounts').update({
+                            'automation_status': 'token_capture_failed',
+                            'automation_error': f"Browser automation failed: {automation_response.text}",
+                            'updated_at': datetime.now().isoformat()
+                        }).eq('id', ghl_record_id).execute()
+
+            except Exception as automation_error:
+                print(f"[GHL BACKGROUND] ⚠️ Could not trigger browser automation: {automation_error}")
+                supabase.table('ghl_subaccounts').update({
+                    'automation_status': 'token_capture_failed',
+                    'automation_error': str(automation_error),
+                    'updated_at': datetime.now().isoformat()
+                }).eq('id', ghl_record_id).execute()
+        else:
+            print(f"[GHL BACKGROUND] ✅ Firebase token already captured via API - no browser automation needed")
         
         # Step 4: Create Facebook integration record
         facebook_record_id = str(uuid.uuid4())
