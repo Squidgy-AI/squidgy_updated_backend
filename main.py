@@ -5141,28 +5141,108 @@ async def run_ghl_creation_background(
         
         soma_user_id = soma_user_response.get("user_id")
         print(f"[GHL BACKGROUND] ✅ Soma user created with ID: {soma_user_id}")
+
+        # CRITICAL: Authenticate as soma_ghl_user to get their firebase_token
+        # We need the soma_ghl_user's firebase_token (not agency user's) for social media API calls
+        print(f"[GHL BACKGROUND] 🔥 Authenticating as soma_ghl_user to get firebase_token...")
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                auth_response = await client.post(
+                    "https://backend.leadconnectorhq.com/users/authenticate",
+                    json={
+                        "email": soma_unique_email,
+                        "password": "Dummy@123"
+                    }
+                )
+
+                if auth_response.status_code == 200:
+                    auth_data = auth_response.json()
+                    soma_firebase_token = auth_data.get('firebase_token')
+                    soma_access_token = auth_data.get('access_token')
+
+                    print(f"[GHL BACKGROUND] ✅ Got soma_ghl_user tokens!")
+                    print(f"[GHL BACKGROUND] 🔥 firebase_token: {soma_firebase_token[:30] if soma_firebase_token else 'N/A'}...")
+                    print(f"[GHL BACKGROUND] 🔑 access_token: {soma_access_token[:30] if soma_access_token else 'N/A'}...")
+
+                    # Decode firebase_token to extract agency_user_id
+                    agency_user_id = None
+                    if soma_firebase_token:
+                        try:
+                            import base64
+                            import json
+                            parts = soma_firebase_token.split('.')
+                            if len(parts) >= 2:
+                                payload_part = parts[1]
+                                padding = 4 - len(payload_part) % 4
+                                if padding != 4:
+                                    payload_part += '=' * padding
+                                payload_json = base64.urlsafe_b64decode(payload_part)
+                                payload = json.loads(payload_json)
+                                agency_user_id = payload.get('user_id')
+                                print(f"[GHL BACKGROUND] 👤 Extracted agency_user_id: {agency_user_id}")
+                        except Exception as decode_error:
+                            print(f"[GHL BACKGROUND] ⚠️ Could not decode firebase_token: {decode_error}")
+
+                    # Update database with Soma user creation + tokens
+                    supabase.table('ghl_subaccounts').update({
+                        'soma_ghl_user_id': soma_user_id,
+                        'soma_ghl_email': soma_unique_email,
+                        'soma_ghl_password': "Dummy@123",
+                        'soma_user_created_at': datetime.now().isoformat(),
+                        'creation_status': 'created',
+                        'automation_status': 'ready',
+                        # CRITICAL: Save soma_ghl_user's tokens (not agency user's)
+                        'firebase_token': soma_firebase_token,
+                        'firebase_token_time': datetime.now().isoformat(),
+                        'access_token': soma_access_token,
+                        'agency_user_id': agency_user_id,
+                        'updated_at': datetime.now().isoformat()
+                    }).eq('id', ghl_record_id).execute()
+
+                    print(f"[GHL BACKGROUND] ✅ Saved soma_ghl_user tokens to database!")
+                else:
+                    print(f"[GHL BACKGROUND] ❌ Authentication failed: {auth_response.status_code} - {auth_response.text}")
+                    # Still update database with user creation (without tokens)
+                    supabase.table('ghl_subaccounts').update({
+                        'soma_ghl_user_id': soma_user_id,
+                        'soma_ghl_email': soma_unique_email,
+                        'soma_ghl_password': "Dummy@123",
+                        'soma_user_created_at': datetime.now().isoformat(),
+                        'creation_status': 'created',
+                        'automation_status': 'ready',
+                        'updated_at': datetime.now().isoformat()
+                    }).eq('id', ghl_record_id).execute()
+
+        except Exception as auth_error:
+            print(f"[GHL BACKGROUND] ❌ Error authenticating soma_ghl_user: {auth_error}")
+            # Still update database with user creation (without tokens)
+            supabase.table('ghl_subaccounts').update({
+                'soma_ghl_user_id': soma_user_id,
+                'soma_ghl_email': soma_unique_email,
+                'soma_ghl_password': "Dummy@123",
+                'soma_user_created_at': datetime.now().isoformat(),
+                'creation_status': 'created',
+                'automation_status': 'ready',
+                'updated_at': datetime.now().isoformat()
+            }).eq('id', ghl_record_id).execute()
         
-        # Update database with Soma user creation success
-        supabase.table('ghl_subaccounts').update({
-            'soma_ghl_user_id': soma_user_id,
-            'soma_ghl_email': soma_unique_email,
-            'soma_ghl_password': "Dummy@123",
-            'soma_user_created_at': datetime.now().isoformat(),
-            'creation_status': 'created',
-            'automation_status': 'ready',
-            'updated_at': datetime.now().isoformat()
-        }).eq('id', ghl_record_id).execute()
-        
-        # Step 3: Start PIT Token automation background task
-        print(f"[GHL BACKGROUND] 🔑 Starting PIT Token automation...")
-        asyncio.create_task(run_pit_token_automation(
-            ghl_record_id=ghl_record_id,
-            location_id=location_id,
-            email=soma_unique_email,
-            password="Dummy@123",
-            firm_user_id=user_id,
-            ghl_user_id=soma_user_id
-        ))
+        # Step 3: PIT Token automation - COMMENTED OUT (NOT NEEDED)
+        # We removed authorization header from all social media API calls
+        # Only firebase_token is needed, which we already have from soma_ghl_user authentication
+        # PIT token is not used anywhere in the codebase anymore
+        print(f"[GHL BACKGROUND] ⏭️  Skipping PIT Token automation (not needed - using firebase_token only)")
+        # asyncio.create_task(run_pit_token_automation(
+        #     ghl_record_id=ghl_record_id,
+        #     location_id=location_id,
+        #     email=soma_unique_email,
+        #     password="Dummy@123",
+        #     firm_user_id=user_id,
+        #     ghl_user_id=soma_user_id
+        # ))
+
+        # Mark automation as completed since we already have firebase_token
+        print(f"[GHL BACKGROUND] ✅ Automation already completed (firebase_token captured)")
         
         # Step 4: Create Facebook integration record
         facebook_record_id = str(uuid.uuid4())
@@ -5547,21 +5627,24 @@ async def trigger_pit_automation(ghl_record_id: str):
         if not ghl_data.get('soma_ghl_password'):
             raise HTTPException(status_code=400, detail="Soma password not found in record")
         
-        # Start PIT automation
-        asyncio.create_task(run_pit_token_automation(
-            ghl_record_id=ghl_record_id,
-            location_id=ghl_data['ghl_location_id'],
-            email=ghl_data['soma_ghl_email'],
-            password=ghl_data['soma_ghl_password'],
-            firm_user_id=ghl_data['firm_user_id'],
-            ghl_user_id=ghl_data.get('soma_ghl_user_id')
-        ))
-        
-        print(f"[MANUAL PIT] ✅ PIT automation task started")
-        
+        # PIT automation - COMMENTED OUT (NOT NEEDED)
+        # We removed authorization header from all social media API calls
+        # Only firebase_token is needed, which is already captured during user creation
+        print(f"[MANUAL PIT] ⏭️  PIT automation no longer needed (using firebase_token only)")
+        # asyncio.create_task(run_pit_token_automation(
+        #     ghl_record_id=ghl_record_id,
+        #     location_id=ghl_data['ghl_location_id'],
+        #     email=ghl_data['soma_ghl_email'],
+        #     password=ghl_data['soma_ghl_password'],
+        #     firm_user_id=ghl_data['firm_user_id'],
+        #     ghl_user_id=ghl_data.get('soma_ghl_user_id')
+        # ))
+
+        print(f"[MANUAL PIT] ℹ️  firebase_token is already available from user creation")
+
         return {
-            "status": "started",
-            "message": "PIT token automation started successfully",
+            "status": "skipped",
+            "message": "PIT token automation no longer needed - using firebase_token only",
             "ghl_record_id": ghl_record_id,
             "location_id": ghl_data['ghl_location_id'],
             "check_status_endpoint": f"/api/ghl/status/{ghl_record_id}",
