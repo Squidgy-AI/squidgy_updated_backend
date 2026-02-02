@@ -5237,13 +5237,12 @@ async def run_ghl_creation_background(
 
             async with httpx.AsyncClient(timeout=300.0) as client:
                 automation_response = await client.post(
-                    f"{automation_service_url}/ghl-complete-task",
+                    f"{automation_service_url}/ghl/complete-automation",
                     json={
                         "location_id": location_id,
                         "email": soma_unique_email,
                         "password": "Dummy@123",
                         "firm_user_id": user_id,
-                        "agent_id": "SOL",
                         "ghl_user_id": soma_user_id
                     }
                 )
@@ -5722,13 +5721,12 @@ async def refresh_ghl_tokens(firm_user_id: str, agent_id: str = "SOL"):
 
         async with httpx.AsyncClient(timeout=300.0) as client:
             automation_response = await client.post(
-                f"{automation_service_url}/ghl-complete-task",
+                f"{automation_service_url}/ghl/complete-automation",
                 json={
                     "location_id": location_id,
                     "email": soma_email,
                     "password": soma_password,
                     "firm_user_id": firm_user_id,
-                    "agent_id": agent_id,
                     "ghl_user_id": soma_user_id
                 }
             )
