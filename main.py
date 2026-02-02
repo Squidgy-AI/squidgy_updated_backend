@@ -28,7 +28,7 @@ from PIL import Image
 
 # Local imports
 from Website.web_scrape import capture_website_screenshot, get_website_favicon_async
-from Website.web_analysis import analyze_website as analyze_website_local
+from Website.web_analysis import analyze_website as analyze_website_local, extract_colors_from_website
 from invitation_handler import InvitationHandler
 from file_processing_service import FileProcessingService
 from background_text_processor import get_background_processor, initialize_background_processor
@@ -3361,6 +3361,17 @@ async def website_analysis_complete_endpoint(
         if existing_record.data and len(existing_record.data) > 0:
             cached_record = existing_record.data[0]
             logger.info(f"Cache hit: exact match found for (firm_user_id={request.firm_user_id}, agent_id={request.agent_id}, url={normalized_url})")
+            
+            # Extract brand colors (not cached, always fresh)
+            brand_colors = []
+            try:
+                loop = asyncio.get_event_loop()
+                brand_colors = await loop.run_in_executor(None, extract_colors_from_website, request.url)
+                logger.info(f"Extracted {len(brand_colors)} brand colors from cached URL {request.url}")
+            except Exception as color_error:
+                logger.warning(f"Color extraction failed for cached URL: {color_error}")
+                brand_colors = []
+            
             return {
                 "status": "success",
                 "cached": True,
@@ -3373,7 +3384,8 @@ async def website_analysis_complete_endpoint(
                     "tags": cached_record.get('tags'),
                     "screenshot_url": cached_record.get('screenshot_url'),
                     "favicon_url": cached_record.get('favicon_url'),
-                    "website_url": cached_record.get('website_url')
+                    "website_url": cached_record.get('website_url'),
+                    "brand_colors": brand_colors
                 },
                 "message": "Analysis retrieved from cache"
             }
@@ -3702,6 +3714,16 @@ Provide ONLY valid JSON, no additional text."""
 
         logger.info(f"Screenshot and favicon fired as 2 independent tasks - not blocking response")
 
+        # Extract brand colors from the website (run in thread pool to avoid blocking)
+        brand_colors = []
+        try:
+            loop = asyncio.get_event_loop()
+            brand_colors = await loop.run_in_executor(None, extract_colors_from_website, request.url)
+            logger.info(f"Extracted {len(brand_colors)} brand colors from {request.url}")
+        except Exception as color_error:
+            logger.warning(f"Color extraction failed: {color_error}")
+            brand_colors = []
+
         # Return the latest record data
         if latest_record.data and len(latest_record.data) > 0:
             record = latest_record.data[0]
@@ -3717,7 +3739,8 @@ Provide ONLY valid JSON, no additional text."""
                     "tags": record.get('tags'),
                     "screenshot_url": record.get('screenshot_url'),
                     "favicon_url": record.get('favicon_url'),
-                    "website_url": record.get('website_url')
+                    "website_url": record.get('website_url'),
+                    "brand_colors": brand_colors
                 },
                 "processing_assets": True,
                 "message": "Analysis completed. Screenshot and favicon are being captured in background."
@@ -3733,7 +3756,8 @@ Provide ONLY valid JSON, no additional text."""
                     "business_domain": business_domain,
                     "website_url": normalized_url,
                     "screenshot_url": None,
-                    "favicon_url": None
+                    "favicon_url": None,
+                    "brand_colors": brand_colors
                 },
                 "processing_assets": True,
                 "message": "Analysis completed. Screenshot and favicon are being captured in background."

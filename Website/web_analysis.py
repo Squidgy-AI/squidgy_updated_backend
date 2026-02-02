@@ -7,9 +7,139 @@ import httpx
 from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse, urljoin
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List, Set
+import re
+from collections import Counter
 
 logger = logging.getLogger(__name__)
+
+
+def extract_colors_from_website(url: str) -> List[str]:
+    """
+    Extract hex color codes from a website by parsing CSS and inline styles.
+    
+    Args:
+        url: The website URL to extract colors from
+        
+    Returns:
+        List of unique hex color codes (e.g., ['#FF5733', '#2C3E50', '#FFFFFF'])
+    """
+    try:
+        # Ensure URL has protocol
+        if not url.startswith(('http://', 'https://')):
+            url = 'https://' + url
+            
+        logger.info(f"Extracting colors from: {url}")
+        
+        # Fetch the page
+        with httpx.Client(
+            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'},
+            timeout=15.0,
+            follow_redirects=True
+        ) as client:
+            response = client.get(url)
+            
+            if response.status_code >= 400:
+                logger.warning(f"HTTP {response.status_code} when fetching {url} for color extraction")
+                return []
+                
+            html_content = response.text
+            
+            # Also try to fetch main CSS files
+            soup = BeautifulSoup(html_content, 'html.parser')
+            css_content = ""
+            
+            # Get inline styles from style tags
+            for style_tag in soup.find_all('style'):
+                if style_tag.string:
+                    css_content += style_tag.string + "\n"
+            
+            # Get external CSS files (limit to first 3 to avoid slowdown)
+            css_links = soup.find_all('link', rel='stylesheet')[:3]
+            for link in css_links:
+                href = link.get('href')
+                if href:
+                    css_url = urljoin(url, href)
+                    try:
+                        css_response = client.get(css_url)
+                        if css_response.status_code == 200:
+                            css_content += css_response.text + "\n"
+                    except Exception as css_err:
+                        logger.debug(f"Could not fetch CSS {css_url}: {css_err}")
+        
+        # Combine HTML and CSS for color extraction
+        all_content = html_content + "\n" + css_content
+        
+        # Extract colors using regex patterns
+        colors = extract_hex_colors(all_content)
+        
+        logger.info(f"Extracted {len(colors)} unique colors from {url}")
+        return colors
+        
+    except Exception as e:
+        logger.error(f"Color extraction failed for {url}: {str(e)}")
+        return []
+
+
+def extract_hex_colors(content: str) -> List[str]:
+    """
+    Extract and normalize hex color codes from CSS/HTML content.
+    Returns the most frequently used colors, sorted by frequency.
+    
+    Args:
+        content: HTML/CSS content string
+        
+    Returns:
+        List of unique hex colors, most frequent first (max 10)
+    """
+    # Regex patterns for different color formats
+    # 6-digit hex: #RRGGBB
+    hex6_pattern = r'#([0-9A-Fa-f]{6})(?![0-9A-Fa-f])'
+    # 3-digit hex: #RGB
+    hex3_pattern = r'#([0-9A-Fa-f]{3})(?![0-9A-Fa-f])'
+    # RGB/RGBA: rgb(r, g, b) or rgba(r, g, b, a)
+    rgb_pattern = r'rgba?\s*\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})(?:\s*,\s*[\d.]+)?\s*\)'
+    
+    all_colors = []
+    
+    # Extract 6-digit hex colors
+    for match in re.finditer(hex6_pattern, content):
+        hex_color = f"#{match.group(1).upper()}"
+        all_colors.append(hex_color)
+    
+    # Extract 3-digit hex colors and expand to 6-digit
+    for match in re.finditer(hex3_pattern, content):
+        short_hex = match.group(1).upper()
+        # Expand #RGB to #RRGGBB
+        hex_color = f"#{short_hex[0]}{short_hex[0]}{short_hex[1]}{short_hex[1]}{short_hex[2]}{short_hex[2]}"
+        all_colors.append(hex_color)
+    
+    # Extract RGB/RGBA colors and convert to hex
+    for match in re.finditer(rgb_pattern, content):
+        try:
+            r, g, b = int(match.group(1)), int(match.group(2)), int(match.group(3))
+            if 0 <= r <= 255 and 0 <= g <= 255 and 0 <= b <= 255:
+                hex_color = f"#{r:02X}{g:02X}{b:02X}"
+                all_colors.append(hex_color)
+        except ValueError:
+            continue
+    
+    # Filter out common non-brand colors (pure black, white, transparent equivalents)
+    excluded_colors = {'#000000', '#FFFFFF', '#FEFEFE', '#010101', '#FDFDFD', '#020202'}
+    filtered_colors = [c for c in all_colors if c not in excluded_colors]
+    
+    # If we filtered everything, use original list
+    if not filtered_colors and all_colors:
+        filtered_colors = all_colors
+    
+    # Count frequency and get top colors
+    color_counts = Counter(filtered_colors)
+    
+    # Get unique colors sorted by frequency (most common first), max 10
+    unique_colors = [color for color, count in color_counts.most_common(10)]
+    
+    return unique_colors
+
 
 # OpenRouter configuration
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
