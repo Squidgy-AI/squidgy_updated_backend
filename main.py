@@ -3002,6 +3002,50 @@ async def capture_favicon_independent(
         logger.error(f"[ASYNC FAVICON] Error: {str(e)}")
 
 
+async def capture_brand_colors_independent(
+    url: str,
+    firm_user_id: str,
+    agent_id: str,
+    firm_id: str
+):
+    """
+    INDEPENDENT task to extract brand colors - runs completely async.
+    Updates website_analysis table with brand_colors.
+    Fire-and-forget - doesn't block the API response.
+    """
+    try:
+        # Wait 1 second before starting (less than screenshot/favicon as it's lighter)
+        await asyncio.sleep(1)
+
+        logger.info(f"[ASYNC COLORS] Starting independent brand color extraction for {url}")
+
+        # Extract colors in thread pool to avoid blocking event loop
+        loop = asyncio.get_event_loop()
+        brand_colors = await loop.run_in_executor(None, extract_colors_from_website, url)
+
+        # Update database if we got colors
+        if brand_colors and len(brand_colors) > 0:
+            normalized_url = normalize_url(url)
+
+            # Update the website_analysis record
+            supabase.table('website_analysis')\
+                .update({
+                    'brand_colors': brand_colors,
+                    'last_updated_timestamp': datetime.now(timezone.utc).isoformat()
+                })\
+                .eq('firm_user_id', firm_user_id)\
+                .eq('agent_id', agent_id)\
+                .eq('firm_id', firm_id)\
+                .execute()
+
+            logger.info(f"[ASYNC COLORS] ✓ Extracted and saved {len(brand_colors)} brand colors")
+        else:
+            logger.warning(f"[ASYNC COLORS] ✗ No brand colors extracted from {url}")
+
+    except Exception as e:
+        logger.error(f"[ASYNC COLORS] Error: {str(e)}")
+
+
 async def capture_screenshot_and_favicon_independent(
     url: str,
     firm_user_id: str,
@@ -3362,17 +3406,22 @@ async def website_analysis_complete_endpoint(
         if existing_record.data and len(existing_record.data) > 0:
             cached_record = existing_record.data[0]
             logger.info(f"Cache hit: exact match found for (firm_user_id={request.firm_user_id}, agent_id={request.agent_id}, url={normalized_url})")
-            
-            # Extract brand colors (not cached, always fresh)
-            brand_colors = []
-            try:
-                loop = asyncio.get_event_loop()
-                brand_colors = await loop.run_in_executor(None, extract_colors_from_website, request.url)
-                logger.info(f"Extracted {len(brand_colors)} brand colors from cached URL {request.url}")
-            except Exception as color_error:
-                logger.warning(f"Color extraction failed for cached URL: {color_error}")
-                brand_colors = []
-            
+
+            # Get cached brand colors from database (or empty if not yet extracted)
+            brand_colors = cached_record.get('brand_colors', [])
+
+            # If no cached brand colors, fire async task to extract them in background
+            if not brand_colors or len(brand_colors) == 0:
+                logger.info(f"No cached brand colors - firing async extraction")
+                asyncio.create_task(
+                    capture_brand_colors_independent(
+                        request.url,
+                        request.firm_user_id,
+                        request.agent_id,
+                        firm_id
+                    )
+                )
+
             return {
                 "status": "success",
                 "cached": True,
@@ -3386,7 +3435,7 @@ async def website_analysis_complete_endpoint(
                     "screenshot_url": cached_record.get('screenshot_url'),
                     "favicon_url": cached_record.get('favicon_url'),
                     "website_url": cached_record.get('website_url'),
-                    "brand_colors": brand_colors
+                    "brand_colors": brand_colors  # Cached colors or empty (will be populated async)
                 },
                 "message": "Analysis retrieved from cache"
             }
@@ -3688,12 +3737,22 @@ Provide ONLY valid JSON, no additional text."""
 
         logger.info(f"Analysis saved to database for {normalized_url}")
 
-        # Fire screenshot and favicon as TWO COMPLETELY SEPARATE independent async tasks
+        # Fire THREE COMPLETELY SEPARATE independent async tasks
         # They run independently from each other - one failure won't affect the other
         # Uses asyncio.create_task() to run without blocking response
-        # Screenshot starts after 2s, favicon after 3s (slightly offset)
+        # Colors start after 1s, screenshot after 2s, favicon after 3s (slightly offset)
 
-        # Task 1: Screenshot capture
+        # Task 1: Brand color extraction
+        asyncio.create_task(
+            capture_brand_colors_independent(
+                request.url,
+                request.firm_user_id,
+                request.agent_id,
+                firm_id
+            )
+        )
+
+        # Task 2: Screenshot capture
         asyncio.create_task(
             capture_screenshot_independent(
                 request.url,
@@ -3703,7 +3762,7 @@ Provide ONLY valid JSON, no additional text."""
             )
         )
 
-        # Task 2: Favicon capture
+        # Task 3: Favicon capture
         asyncio.create_task(
             capture_favicon_independent(
                 request.url,
@@ -3713,19 +3772,9 @@ Provide ONLY valid JSON, no additional text."""
             )
         )
 
-        logger.info(f"Screenshot and favicon fired as 2 independent tasks - not blocking response")
+        logger.info(f"Screenshot, favicon, and brand colors fired as 3 independent tasks - not blocking response")
 
-        # Extract brand colors from the website (run in thread pool to avoid blocking)
-        brand_colors = []
-        try:
-            loop = asyncio.get_event_loop()
-            brand_colors = await loop.run_in_executor(None, extract_colors_from_website, request.url)
-            logger.info(f"Extracted {len(brand_colors)} brand colors from {request.url}")
-        except Exception as color_error:
-            logger.warning(f"Color extraction failed: {color_error}")
-            brand_colors = []
-
-        # Return the latest record data
+        # Return the latest record data (assets are being processed in background)
         if latest_record.data and len(latest_record.data) > 0:
             record = latest_record.data[0]
             return {
@@ -3741,10 +3790,10 @@ Provide ONLY valid JSON, no additional text."""
                     "screenshot_url": record.get('screenshot_url'),
                     "favicon_url": record.get('favicon_url'),
                     "website_url": record.get('website_url'),
-                    "brand_colors": brand_colors
+                    "brand_colors": []  # Will be populated by background task
                 },
                 "processing_assets": True,
-                "message": "Analysis completed. Screenshot and favicon are being captured in background."
+                "message": "Analysis completed. Screenshot, favicon, and brand colors are being captured in background."
             }
         else:
             # Fallback if fetch failed (shouldn't happen)
@@ -3758,10 +3807,10 @@ Provide ONLY valid JSON, no additional text."""
                     "website_url": normalized_url,
                     "screenshot_url": None,
                     "favicon_url": None,
-                    "brand_colors": brand_colors
+                    "brand_colors": []  # Will be populated by background task
                 },
                 "processing_assets": True,
-                "message": "Analysis completed. Screenshot and favicon are being captured in background."
+                "message": "Analysis completed. Screenshot, favicon, and brand colors are being captured in background."
             }
 
     except Exception as e:
