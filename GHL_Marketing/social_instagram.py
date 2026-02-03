@@ -54,7 +54,7 @@ async def get_ghl_tokens(firm_user_id: str, agent_id: str = "SOL"):
     try:
         # Get all tokens from ghl_subaccounts table
         ghl_result = supabase.table('ghl_subaccounts')\
-            .select('ghl_location_id, firebase_token, pit_token, soma_ghl_user_id, agency_user_id, access_token')\
+            .select('ghl_location_id, firebase_token, firebase_token_time, pit_token, soma_ghl_user_id, agency_user_id, access_token')\
             .eq('firm_user_id', firm_user_id)\
             .eq('agent_id', agent_id)\
             .single()\
@@ -66,6 +66,7 @@ async def get_ghl_tokens(firm_user_id: str, agent_id: str = "SOL"):
         return {
             'location_id': ghl_result.data.get('ghl_location_id'),
             'firebase_token': ghl_result.data.get('firebase_token'),
+            'firebase_token_time': ghl_result.data.get('firebase_token_time'),
             'access_token': ghl_result.data.get('access_token') or ghl_result.data.get('pit_token'),
             'soma_ghl_user_id': ghl_result.data.get('soma_ghl_user_id'),  # Reference only
             'agency_user_id': ghl_result.data.get('agency_user_id')  # For API calls
@@ -146,12 +147,29 @@ async def get_connected_instagram_accounts(request: StartOAuthRequest):
 
         location_id = tokens['location_id']
         firebase_token = tokens['firebase_token']
+        firebase_token_time = tokens.get('firebase_token_time')
 
-        if not location_id or not firebase_token:
-            # Provide helpful error message for users without tokens
+        # Check if firebase_token exists and is NOT expired
+        token_expired = False
+        if firebase_token and firebase_token_time:
+            from datetime import datetime, timezone
+            try:
+                # Parse token time
+                token_time = datetime.fromisoformat(firebase_token_time.replace('Z', '+00:00'))
+                # Check if token is older than 1 hour
+                age_seconds = (datetime.now(timezone.utc) - token_time).total_seconds()
+                token_expired = age_seconds > 3600  # 1 hour
+                if token_expired:
+                    logger.info(f"[SOCIAL IG] Firebase token expired (age: {age_seconds/60:.1f} minutes)")
+            except Exception as e:
+                logger.warning(f"[SOCIAL IG] Error checking token age: {e}")
+
+        if not location_id or not firebase_token or token_expired:
+            # Provide helpful error message for users without tokens or expired tokens
+            error_detail = "Missing firebase_token" if not firebase_token else "Firebase token expired"
             raise HTTPException(
                 status_code=400,
-                detail="Missing firebase_token. Please refresh your GHL connection. Call POST /api/ghl/refresh-tokens/{firm_user_id} to fix this."
+                detail=f"{error_detail}. Please refresh your GHL connection. Call POST /api/ghl/refresh-tokens/{firm_user_id} to fix this."
             )
 
         # Call GHL API to get all accounts
@@ -222,12 +240,29 @@ async def get_available_instagram_accounts(request: GetAccountsRequest):
 
         location_id = tokens['location_id']
         firebase_token = tokens['firebase_token']
+        firebase_token_time = tokens.get('firebase_token_time')
 
-        if not location_id or not firebase_token:
-            # Provide helpful error message for users without tokens
+        # Check if firebase_token exists and is NOT expired
+        token_expired = False
+        if firebase_token and firebase_token_time:
+            from datetime import datetime, timezone
+            try:
+                # Parse token time
+                token_time = datetime.fromisoformat(firebase_token_time.replace('Z', '+00:00'))
+                # Check if token is older than 1 hour
+                age_seconds = (datetime.now(timezone.utc) - token_time).total_seconds()
+                token_expired = age_seconds > 3600  # 1 hour
+                if token_expired:
+                    logger.info(f"[SOCIAL IG] Firebase token expired (age: {age_seconds/60:.1f} minutes)")
+            except Exception as e:
+                logger.warning(f"[SOCIAL IG] Error checking token age: {e}")
+
+        if not location_id or not firebase_token or token_expired:
+            # Provide helpful error message for users without tokens or expired tokens
+            error_detail = "Missing firebase_token" if not firebase_token else "Firebase token expired"
             raise HTTPException(
                 status_code=400,
-                detail="Missing firebase_token. Please refresh your GHL connection. Call POST /api/ghl/refresh-tokens/{firm_user_id} to fix this."
+                detail=f"{error_detail}. Please refresh your GHL connection. Call POST /api/ghl/refresh-tokens/{firm_user_id} to fix this."
             )
 
         # Call GHL API to get available accounts
@@ -323,12 +358,29 @@ async def connect_instagram_account(request: ConnectAccountRequest):
 
         location_id = tokens['location_id']
         firebase_token = tokens['firebase_token']
+        firebase_token_time = tokens.get('firebase_token_time')
 
-        if not location_id or not firebase_token:
-            # Provide helpful error message for users without tokens
+        # Check if firebase_token exists and is NOT expired
+        token_expired = False
+        if firebase_token and firebase_token_time:
+            from datetime import datetime, timezone
+            try:
+                # Parse token time
+                token_time = datetime.fromisoformat(firebase_token_time.replace('Z', '+00:00'))
+                # Check if token is older than 1 hour
+                age_seconds = (datetime.now(timezone.utc) - token_time).total_seconds()
+                token_expired = age_seconds > 3600  # 1 hour
+                if token_expired:
+                    logger.info(f"[SOCIAL IG] Firebase token expired (age: {age_seconds/60:.1f} minutes)")
+            except Exception as e:
+                logger.warning(f"[SOCIAL IG] Error checking token age: {e}")
+
+        if not location_id or not firebase_token or token_expired:
+            # Provide helpful error message for users without tokens or expired tokens
+            error_detail = "Missing firebase_token" if not firebase_token else "Firebase token expired"
             raise HTTPException(
                 status_code=400,
-                detail="Missing firebase_token. Please refresh your GHL connection. Call POST /api/ghl/refresh-tokens/{firm_user_id} to fix this."
+                detail=f"{error_detail}. Please refresh your GHL connection. Call POST /api/ghl/refresh-tokens/{firm_user_id} to fix this."
             )
 
         # Prepare request body
