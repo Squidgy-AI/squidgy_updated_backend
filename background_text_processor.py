@@ -16,10 +16,16 @@ from pathlib import Path
 
 # Text extraction libraries
 try:
-    import PyPDF2
+    import pdfplumber
     from io import BytesIO
+    PyPDF2 = None  # Prefer pdfplumber over PyPDF2
 except ImportError:
-    PyPDF2 = None
+    pdfplumber = None
+    try:
+        import PyPDF2
+        from io import BytesIO
+    except ImportError:
+        PyPDF2 = None
 
 try:
     from docx import Document
@@ -33,22 +39,170 @@ class TextExtractor:
     
     @staticmethod
     def extract_from_pdf(file_bytes: bytes) -> str:
-        """Extract text from PDF bytes"""
-        if not PyPDF2:
-            raise ImportError("PyPDF2 not installed")
+        """
+        Extract text from PDF bytes with proper reading order.
+        Uses pdfplumber (preferred) for better layout preservation,
+        falls back to PyPDF2 if pdfplumber not available.
+        """
+        # Try pdfplumber first (better reading order: top-left to bottom-right)
+        if pdfplumber:
+            try:
+                pdf_file = BytesIO(file_bytes)
+                text_content = []
+                
+                with pdfplumber.open(pdf_file) as pdf:
+                    for i, page in enumerate(pdf.pages, 1):
+                        # Extract words with positions for column-aware sorting
+                        words = page.extract_words(
+                            x_tolerance=3,
+                            y_tolerance=3,
+                            keep_blank_chars=False
+                        )
+                        
+                        if words:
+                            # Dynamic column detection based on word spacing analysis
+                            # 1. Group words by line (same y position)
+                            # 2. Calculate typical word spacing within each line
+                            # 3. Detect column gaps as spacing significantly larger than typical
+                            
+                            # Sort words by y position first, then x
+                            words_sorted = sorted(words, key=lambda w: (round(w['top']), w['x0']))
+                            
+                            # Group words into lines based on y position
+                            lines_with_words = []
+                            current_line = []
+                            last_y = None
+                            
+                            for w in words_sorted:
+                                y = round(w['top'])
+                                if last_y is None or abs(y - last_y) <= 5:
+                                    current_line.append(w)
+                                else:
+                                    if current_line:
+                                        lines_with_words.append(current_line)
+                                    current_line = [w]
+                                last_y = y
+                            if current_line:
+                                lines_with_words.append(current_line)
+                            
+                            # Analyze spacing within lines to find typical word gap vs column gap
+                            all_gaps = []
+                            for line_words in lines_with_words:
+                                if len(line_words) > 1:
+                                    # Sort by x position within line
+                                    line_words_sorted = sorted(line_words, key=lambda w: w['x0'])
+                                    for k in range(len(line_words_sorted) - 1):
+                                        gap = line_words_sorted[k + 1]['x0'] - line_words_sorted[k]['x1']
+                                        if gap > 0:
+                                            all_gaps.append(gap)
+                            
+                            # Determine if multi-column by finding outlier gaps
+                            is_multi_column = False
+                            column_boundary = None
+                            
+                            if all_gaps:
+                                # Calculate median gap (typical word spacing)
+                                sorted_gaps = sorted(all_gaps)
+                                median_gap = sorted_gaps[len(sorted_gaps) // 2]
+                                
+                                # Column gap should be significantly larger than median (3x or more)
+                                threshold = max(median_gap * 3, 20)  # At least 3x median or 20px
+                                
+                                # Find lines with large gaps (potential column separators)
+                                column_gaps = []
+                                for line_words in lines_with_words:
+                                    if len(line_words) > 1:
+                                        line_words_sorted = sorted(line_words, key=lambda w: w['x0'])
+                                        for k in range(len(line_words_sorted) - 1):
+                                            gap = line_words_sorted[k + 1]['x0'] - line_words_sorted[k]['x1']
+                                            if gap > threshold:
+                                                # Record the gap position (middle of the gap)
+                                                gap_x = (line_words_sorted[k]['x1'] + line_words_sorted[k + 1]['x0']) / 2
+                                                column_gaps.append(gap_x)
+                                
+                                # If multiple lines have large gaps at similar x positions, it's multi-column
+                                if len(column_gaps) >= 2:
+                                    # Find the most common gap position (cluster)
+                                    column_gaps_sorted = sorted(column_gaps)
+                                    # Use median of gap positions as column boundary
+                                    column_boundary = column_gaps_sorted[len(column_gaps_sorted) // 2]
+                                    is_multi_column = True
+                            
+                            if is_multi_column and column_boundary:
+                                # Split words into left and right columns
+                                left_words = [w for w in words if w['x1'] < column_boundary]
+                                right_words = [w for w in words if w['x0'] > column_boundary]
+                                
+                                # Only proceed if both columns have content
+                                if len(left_words) > 2 and len(right_words) > 2:
+                                    # Sort each column by y position (top to bottom), then x
+                                    left_words.sort(key=lambda w: (w['top'], w['x0']))
+                                    right_words.sort(key=lambda w: (w['top'], w['x0']))
+                                    
+                                    # Build text from word list
+                                    def words_to_text(word_list):
+                                        if not word_list:
+                                            return ""
+                                        lines = []
+                                        current_line = []
+                                        last_top = word_list[0]['top']
+                                        
+                                        for w in word_list:
+                                            if abs(w['top'] - last_top) > 5:
+                                                if current_line:
+                                                    lines.append(' '.join(current_line))
+                                                current_line = [w['text']]
+                                                last_top = w['top']
+                                            else:
+                                                current_line.append(w['text'])
+                                        
+                                        if current_line:
+                                            lines.append(' '.join(current_line))
+                                        
+                                        return '\n'.join(lines)
+                                    
+                                    left_text = words_to_text(left_words)
+                                    right_text = words_to_text(right_words)
+                                    page_text = left_text + '\n\n' + right_text
+                                else:
+                                    page_text = page.extract_text(x_tolerance=3, y_tolerance=3)
+                            else:
+                                # Single column - use default extraction
+                                page_text = page.extract_text(x_tolerance=3, y_tolerance=3)
+                        else:
+                            page_text = page.extract_text(x_tolerance=3, y_tolerance=3)
+                        
+                        if page_text and page_text.strip():
+                            # Clean up whitespace
+                            cleaned_text = re.sub(r'[ \t]+', ' ', page_text)
+                            cleaned_text = re.sub(r'\n\s*\n', '\n\n', cleaned_text)
+                            cleaned_lines = [line.rstrip() for line in cleaned_text.split('\n')]
+                            cleaned_text = '\n'.join(cleaned_lines).strip()
+                            text_content.append(f"--- Page {i} ---\n{cleaned_text}")
+                
+                return '\n\n'.join(text_content).strip()
+            except Exception as e:
+                logger.error(f"pdfplumber extraction error: {e}")
+                raise Exception(f"Failed to extract text from PDF: {str(e)}")
         
-        try:
-            pdf_file = BytesIO(file_bytes)
-            pdf_reader = PyPDF2.PdfReader(pdf_file)
-            
-            text_content = []
-            for page in pdf_reader.pages:
-                text_content.append(page.extract_text())
-            
-            return '\n'.join(text_content).strip()
-        except Exception as e:
-            logger.error(f"PDF extraction error: {e}")
-            raise Exception(f"Failed to extract text from PDF: {str(e)}")
+        # Fallback to PyPDF2
+        if PyPDF2:
+            try:
+                pdf_file = BytesIO(file_bytes)
+                pdf_reader = PyPDF2.PdfReader(pdf_file)
+                
+                text_content = []
+                for i, page in enumerate(pdf_reader.pages, 1):
+                    page_text = page.extract_text()
+                    if page_text and page_text.strip():
+                        text_content.append(f"--- Page {i} ---\n{page_text.strip()}")
+                
+                return '\n\n'.join(text_content).strip()
+            except Exception as e:
+                logger.error(f"PyPDF2 extraction error: {e}")
+                raise Exception(f"Failed to extract text from PDF: {str(e)}")
+        
+        raise ImportError("No PDF library installed. Install pdfplumber or PyPDF2.")
     
     @staticmethod
     def extract_from_txt(file_bytes: bytes) -> str:
