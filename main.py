@@ -3444,43 +3444,100 @@ async def website_analysis_complete_endpoint(
         logger.info(f"🔍 CASE 2: Running fresh analysis for {normalized_url}")
         print(f"\n🔍 CASE 2: Running fresh analysis for {normalized_url}", flush=True)
 
-        # ========== COMMENTED OUT: Local web scraping (causes memory/stability issues on Heroku) ==========
-        # # Use local web scraping instead of external endpoint
-        # analysis_result = analyze_website_local(request.url, max_depth=1, max_pages=10)
-        # logger.info(f"✓ Scraping completed, success={analysis_result['success']}")
-        # print(f"✓ Scraping completed, success={analysis_result['success']}", flush=True)
-        #
-        # if not analysis_result['success']:
-        #     print(f"❌ Analysis failed: {analysis_result.get('error')}")
-        #     return {
-        #         "status": "error",
-        #         "message": f"Website analysis failed: {analysis_result.get('error', 'Unknown error')}"
-        #     }
-        #
-        # # Parse the analysis response
-        # analysis_data = analysis_result.get('data', {})
-        # response_text = analysis_data.get('response_text', '')
-        # logger.info(f"✓ Got response_text, length={len(response_text)} bytes")
-        # print(f"✓ Got response_text, length={len(response_text)} bytes", flush=True)
-        #
-        # # Use AI to extract structured information from scraped content
-        # logger.info(f"🤖 Starting AI analysis on scraped content for {normalized_url}")
-        # print(f"🤖 Starting AI analysis for {normalized_url}", flush=True)
-        # ai_extracted = await analyze_website_content_with_ai(response_text, request.url)
-        # logger.info(f"✓ AI analysis completed: {ai_extracted}")
-        # print(f"✓ AI analysis completed: {ai_extracted}", flush=True)
-        # ========== END COMMENTED OUT SECTION ==========
+        # ========== TRY 1: Direct web scraping with httpx + BeautifulSoup (fast, accurate) ==========
+        # Try to scrape the website directly first - more accurate than web search
+        # Falls back to OpenRouter web search if: 403 error, timeout, or insufficient content
+        use_fallback = False
+        ai_extracted = None
+        response_text = None
 
-        # ========== ACTIVE: Use OpenRouter Web Search API directly (more reliable, less memory) ==========
-        logger.info(f"🌐 Using OpenRouter Web Search API for {request.url}")
-        print(f"🌐 Using OpenRouter Web Search API for {request.url}", flush=True)
+        try:
+            logger.info(f"📡 Attempting direct web scraping for {request.url}")
+            print(f"📡 Attempting direct web scraping for {request.url}", flush=True)
 
-        # Analysis prompt template (used for both free and paid models)
-        # Define this BEFORE the try block so it's available in the fallback
-        import json
-        import re
+            from bs4 import BeautifulSoup
 
-        analysis_prompt = f"""Analyze the website at {request.url} and extract key business information.
+            # Fetch website with httpx (timeout: 15s)
+            async with httpx.AsyncClient(follow_redirects=True, timeout=15.0) as http_client:
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                    'Accept-Language': 'en-US,en;q=0.5',
+                }
+                fetch_response = await http_client.get(request.url, headers=headers)
+
+                # Check for error status codes
+                if fetch_response.status_code == 403:
+                    logger.warning(f"⚠️ 403 Forbidden - falling back to web search")
+                    print(f"⚠️ 403 Forbidden - falling back to web search", flush=True)
+                    use_fallback = True
+                elif fetch_response.status_code >= 400:
+                    logger.warning(f"⚠️ HTTP {fetch_response.status_code} - falling back to web search")
+                    print(f"⚠️ HTTP {fetch_response.status_code} - falling back to web search", flush=True)
+                    use_fallback = True
+                else:
+                    # Parse HTML content
+                    soup = BeautifulSoup(fetch_response.text, 'html.parser')
+
+                    # Remove unwanted elements
+                    for element in soup(['script', 'style', 'nav', 'footer', 'header', 'aside']):
+                        element.decompose()
+
+                    # Extract text content
+                    text_content = soup.get_text(separator='\n', strip=True)
+
+                    # Clean up whitespace
+                    lines = [line.strip() for line in text_content.split('\n') if line.strip()]
+                    cleaned_content = '\n'.join(lines)
+
+                    content_length = len(cleaned_content)
+                    logger.info(f"✓ Scraped {content_length} characters of text")
+                    print(f"✓ Scraped {content_length} characters of text", flush=True)
+
+                    # Check if we have sufficient content (at least 200 chars of meaningful text)
+                    if content_length < 200:
+                        logger.warning(f"⚠️ Insufficient content ({content_length} < 200 chars) - falling back to web search")
+                        print(f"⚠️ Insufficient content ({content_length} < 200 chars) - falling back to web search", flush=True)
+                        use_fallback = True
+                    else:
+                        # We have good content! Truncate to 8000 chars to avoid token limits
+                        response_text = cleaned_content[:8000]
+
+                        logger.info(f"✓ Direct scraping successful - using actual website content")
+                        print(f"✓ Direct scraping successful - using actual website content", flush=True)
+
+                        # Analyze the scraped content with AI
+                        logger.info(f"🤖 Analyzing scraped content with AI")
+                        print(f"🤖 Analyzing scraped content with AI", flush=True)
+
+                        ai_extracted = await analyze_website_content_with_ai(response_text, request.url)
+                        logger.info(f"✓ AI analysis completed from scraped content")
+                        print(f"✓ AI analysis completed from scraped content", flush=True)
+
+        except httpx.TimeoutException:
+            logger.warning(f"⚠️ Scraping timeout - falling back to web search")
+            print(f"⚠️ Scraping timeout - falling back to web search", flush=True)
+            use_fallback = True
+        except Exception as scrape_error:
+            logger.warning(f"⚠️ Scraping error: {str(scrape_error)} - falling back to web search")
+            print(f"⚠️ Scraping error: {str(scrape_error)} - falling back to web search", flush=True)
+            use_fallback = True
+
+        # ========== FALLBACK: Use OpenRouter Web Search API if scraping failed ==========
+        if use_fallback or not ai_extracted:
+            logger.info(f"🌐 Using OpenRouter Web Search API fallback for {request.url}")
+            print(f"🌐 Using OpenRouter Web Search API fallback for {request.url}", flush=True)
+
+            # Analysis prompt template (used for both free and paid models)
+            # Define this BEFORE the try block so it's available in the fallback
+            import json
+            import re
+
+            analysis_prompt = f"""Visit the website {request.url} directly and analyze its actual content.
+
+IMPORTANT: You must actually visit and read the website content at {request.url}.
+Do not make assumptions based on the domain name or search for similar companies.
+Analyze the ACTUAL website content you find.
 
 Please provide in JSON format:
 {{
@@ -3500,91 +3557,13 @@ Guidelines:
 
 Provide ONLY valid JSON, no additional text."""
 
-        try:
-            # Use PAID model directly (FREE model too slow/unreliable - takes 60+ seconds, causes timeouts)
-            # PAID model: deepseek/deepseek-chat - Only $0.14/1M tokens (basically free)
-            # Completes in ~13 seconds (well under Heroku's 30s timeout)
-            # See: https://openrouter.ai/docs/guides/features/plugins/web-search
-            async with httpx.AsyncClient() as http_client:
-                response = await http_client.post(
-                    "https://openrouter.ai/api/v1/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                        "Content-Type": "application/json",
-                        "HTTP-Referer": "https://app.squidgy.ai",
-                        "X-Title": "Squidgy AI Website Analyzer"
-                    },
-                    json={
-                        "model": "deepseek/deepseek-chat",  # PAID but cheap ($0.14/1M tokens), fast & reliable
-                        "plugins": [{"id": "web", "engine": "native", "max_results": 5}],
-                        "messages": [{
-                            "role": "user",
-                            "content": analysis_prompt
-                        }],
-                        "temperature": 0.3,
-                        "max_tokens": 1500
-                    },
-                    timeout=20.0  # Reduced to 20s to allow time for fallback before Heroku's 30s timeout
-                )
-
-                response.raise_for_status()
-                data = response.json()
-
-            logger.info(f"✓ OpenRouter API returned 200 OK")
-            print(f"✓ OpenRouter API returned 200 OK", flush=True)
-
-            # Check if response has expected structure
-            if 'choices' not in data or len(data['choices']) == 0:
-                raise Exception(f"Invalid API response structure: {data}")
-
-            ai_response = data['choices'][0]['message']['content'].strip()
-            response_length = len(ai_response)
-            logger.info(f"✓ OpenRouter Web Search completed (PAID model: deepseek-chat), response length: {response_length}")
-            print(f"✓ OpenRouter Web Search completed (PAID model: deepseek-chat), response length: {response_length}", flush=True)
-
-            # Check response size - if too large, might cause issues
-            if response_length > 10000:
-                logger.warning(f"⚠️ Response very large ({response_length} chars), truncating to 8000")
-                ai_response = ai_response[:8000]
-
-            # Parse JSON from response with timeout protection
-            logger.info(f"🔍 Parsing JSON from response...")
-            print(f"🔍 Parsing JSON from response...", flush=True)
-
-            json_match = re.search(r'```json\s*(.*?)\s*```', ai_response, re.DOTALL)
-            if json_match:
-                json_str = json_match.group(1)
-            else:
-                json_match = re.search(r'\{.*\}', ai_response, re.DOTALL)
-                if json_match:
-                    json_str = json_match.group(0)
-                else:
-                    json_str = ai_response
-
-            logger.info(f"🔍 Found JSON string, length: {len(json_str)}")
-            print(f"🔍 Found JSON string, length: {len(json_str)}, attempting to parse...", flush=True)
-
-            ai_extracted = json.loads(json_str)
-            logger.info(f"✓ AI analysis completed: {ai_extracted}")
-            print(f"✓ AI analysis completed: {ai_extracted}", flush=True)
-
-            # Set response_text for company_description
-            response_text = ai_extracted.get('company_description', f"AI-analyzed content for {request.url}")
-
-        except Exception as e:
-            import traceback
-            error_details = traceback.format_exc()
-            logger.error(f"❌ Primary request failed: {str(e)}")
-            print(f"❌ Primary request failed: {str(e)}, retrying with fresh request...", flush=True)
-
-            # RETRY: Try again with fresh httpx connection
             try:
-                logger.info(f"🔄 Retrying with fresh connection (deepseek/deepseek-chat)")
-                print(f"🔄 Retrying with fresh connection (deepseek/deepseek-chat)", flush=True)
-
-                # Call OpenRouter API with PAID model using httpx
+                # Use PAID model directly (FREE model too slow/unreliable - takes 60+ seconds, causes timeouts)
+                # PAID model: deepseek/deepseek-chat - Only $0.14/1M tokens (basically free)
+                # Completes in ~13 seconds (well under Heroku's 30s timeout)
+                # See: https://openrouter.ai/docs/guides/features/plugins/web-search
                 async with httpx.AsyncClient() as http_client:
-                    fallback_response = await http_client.post(
+                    response = await http_client.post(
                         "https://openrouter.ai/api/v1/chat/completions",
                         headers={
                             "Authorization": f"Bearer {OPENROUTER_API_KEY}",
@@ -3593,7 +3572,7 @@ Provide ONLY valid JSON, no additional text."""
                             "X-Title": "Squidgy AI Website Analyzer"
                         },
                         json={
-                            "model": "deepseek/deepseek-chat",  # Paid but cheap ($0.14/1M tokens)
+                            "model": "deepseek/deepseek-chat",  # PAID but cheap ($0.14/1M tokens), fast & reliable
                             "plugins": [{"id": "web", "engine": "native", "max_results": 5}],
                             "messages": [{
                                 "role": "user",
@@ -3602,32 +3581,32 @@ Provide ONLY valid JSON, no additional text."""
                             "temperature": 0.3,
                             "max_tokens": 1500
                         },
-                        timeout=20.0
+                        timeout=20.0  # Reduced to 20s to allow time for fallback before Heroku's 30s timeout
                     )
 
-                    fallback_response.raise_for_status()
-                    fallback_data = fallback_response.json()
+                    response.raise_for_status()
+                    data = response.json()
 
-                logger.info(f"✓ Fallback API returned 200 OK")
-                print(f"✓ Fallback API returned 200 OK", flush=True)
+                logger.info(f"✓ OpenRouter API returned 200 OK")
+                print(f"✓ OpenRouter API returned 200 OK", flush=True)
 
-                # Check response structure
-                if 'choices' not in fallback_data or len(fallback_data['choices']) == 0:
-                    raise Exception(f"Invalid retry response structure: {fallback_data}")
+                # Check if response has expected structure
+                if 'choices' not in data or len(data['choices']) == 0:
+                    raise Exception(f"Invalid API response structure: {data}")
 
-                ai_response = fallback_data['choices'][0]['message']['content'].strip()
+                ai_response = data['choices'][0]['message']['content'].strip()
                 response_length = len(ai_response)
-                logger.info(f"✓ OpenRouter Web Search completed (retry attempt), response length: {response_length}")
-                print(f"✓ OpenRouter Web Search completed (retry attempt), response length: {response_length}", flush=True)
+                logger.info(f"✓ OpenRouter Web Search completed (PAID model: deepseek-chat), response length: {response_length}")
+                print(f"✓ OpenRouter Web Search completed (PAID model: deepseek-chat), response length: {response_length}", flush=True)
 
-                # Check response size
+                # Check response size - if too large, might cause issues
                 if response_length > 10000:
-                    logger.warning(f"⚠️ Retry response very large ({response_length} chars), truncating to 8000")
+                    logger.warning(f"⚠️ Response very large ({response_length} chars), truncating to 8000")
                     ai_response = ai_response[:8000]
 
-                # Parse JSON from response
-                logger.info(f"🔍 Parsing JSON from retry response...")
-                print(f"🔍 Parsing JSON from retry response...", flush=True)
+                # Parse JSON from response with timeout protection
+                logger.info(f"🔍 Parsing JSON from response...")
+                print(f"🔍 Parsing JSON from response...", flush=True)
 
                 json_match = re.search(r'```json\s*(.*?)\s*```', ai_response, re.DOTALL)
                 if json_match:
@@ -3639,33 +3618,124 @@ Provide ONLY valid JSON, no additional text."""
                     else:
                         json_str = ai_response
 
-                logger.info(f"🔍 Found JSON string from retry, length: {len(json_str)}")
-                print(f"🔍 Found JSON string from retry, length: {len(json_str)}, attempting to parse...", flush=True)
+                logger.info(f"🔍 Found JSON string, length: {len(json_str)}")
+                print(f"🔍 Found JSON string, length: {len(json_str)}, attempting to parse...", flush=True)
 
                 ai_extracted = json.loads(json_str)
-                logger.info(f"✓ AI analysis completed with retry: {ai_extracted}")
-                print(f"✓ AI analysis completed with retry: {ai_extracted}", flush=True)
+                logger.info(f"✓ AI analysis completed: {ai_extracted}")
+                print(f"✓ AI analysis completed: {ai_extracted}", flush=True)
 
                 # Set response_text for company_description
                 response_text = ai_extracted.get('company_description', f"AI-analyzed content for {request.url}")
 
-            except Exception as retry_error:
+            except Exception as e:
                 import traceback
-                retry_details = traceback.format_exc()
-                logger.error(f"❌ Retry also failed: {str(retry_error)}")
-                logger.error(f"❌ Retry Traceback:\n{retry_details}")
-                print(f"❌ Both attempts failed: {str(retry_error)}", flush=True)
-                return {
-                    "status": "error",
-                    "message": f"Website analysis failed after retry: {str(retry_error)}"
-                }
-        # ========== END ACTIVE SECTION ==========
+                error_details = traceback.format_exc()
+                logger.error(f"❌ Primary request failed: {str(e)}")
+                print(f"❌ Primary request failed: {str(e)}, retrying with fresh request...", flush=True)
+
+                # RETRY: Try again with fresh httpx connection
+                try:
+                    logger.info(f"🔄 Retrying with fresh connection (deepseek/deepseek-chat)")
+                    print(f"🔄 Retrying with fresh connection (deepseek/deepseek-chat)", flush=True)
+
+                    # Call OpenRouter API with PAID model using httpx
+                    async with httpx.AsyncClient() as http_client:
+                        fallback_response = await http_client.post(
+                            "https://openrouter.ai/api/v1/chat/completions",
+                            headers={
+                                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                                "Content-Type": "application/json",
+                                "HTTP-Referer": "https://app.squidgy.ai",
+                                "X-Title": "Squidgy AI Website Analyzer"
+                            },
+                            json={
+                                "model": "deepseek/deepseek-chat",  # Paid but cheap ($0.14/1M tokens)
+                                "plugins": [{"id": "web", "engine": "native", "max_results": 5}],
+                                "messages": [{
+                                    "role": "user",
+                                    "content": analysis_prompt
+                                }],
+                                "temperature": 0.3,
+                                "max_tokens": 1500
+                            },
+                            timeout=20.0
+                        )
+
+                        fallback_response.raise_for_status()
+                        fallback_data = fallback_response.json()
+
+                    logger.info(f"✓ Fallback API returned 200 OK")
+                    print(f"✓ Fallback API returned 200 OK", flush=True)
+
+                    # Check response structure
+                    if 'choices' not in fallback_data or len(fallback_data['choices']) == 0:
+                        raise Exception(f"Invalid retry response structure: {fallback_data}")
+
+                    ai_response = fallback_data['choices'][0]['message']['content'].strip()
+                    response_length = len(ai_response)
+                    logger.info(f"✓ OpenRouter Web Search completed (retry attempt), response length: {response_length}")
+                    print(f"✓ OpenRouter Web Search completed (retry attempt), response length: {response_length}", flush=True)
+
+                    # Check response size
+                    if response_length > 10000:
+                        logger.warning(f"⚠️ Retry response very large ({response_length} chars), truncating to 8000")
+                        ai_response = ai_response[:8000]
+
+                    # Parse JSON from response
+                    logger.info(f"🔍 Parsing JSON from retry response...")
+                    print(f"🔍 Parsing JSON from retry response...", flush=True)
+
+                    json_match = re.search(r'```json\s*(.*?)\s*```', ai_response, re.DOTALL)
+                    if json_match:
+                        json_str = json_match.group(1)
+                    else:
+                        json_match = re.search(r'\{.*\}', ai_response, re.DOTALL)
+                        if json_match:
+                            json_str = json_match.group(0)
+                        else:
+                            json_str = ai_response
+
+                    logger.info(f"🔍 Found JSON string from retry, length: {len(json_str)}")
+                    print(f"🔍 Found JSON string from retry, length: {len(json_str)}, attempting to parse...", flush=True)
+
+                    ai_extracted = json.loads(json_str)
+                    logger.info(f"✓ AI analysis completed with retry: {ai_extracted}")
+                    print(f"✓ AI analysis completed with retry: {ai_extracted}", flush=True)
+
+                    # Set response_text for company_description
+                    response_text = ai_extracted.get('company_description', f"AI-analyzed content for {request.url}")
+
+                except Exception as retry_error:
+                    import traceback
+                    retry_details = traceback.format_exc()
+                    logger.error(f"❌ Retry also failed: {str(retry_error)}")
+                    logger.error(f"❌ Retry Traceback:\n{retry_details}")
+                    print(f"❌ Both attempts failed: {str(retry_error)}", flush=True)
+                    return {
+                        "status": "error",
+                        "message": f"Website analysis failed after retry: {str(retry_error)}"
+                    }
+        # ========== END FALLBACK SECTION ==========
+
+        # Final check: Make sure we got results from either scraping or fallback
+        if not ai_extracted:
+            logger.error(f"❌ Both direct scraping and OpenRouter fallback failed for {request.url}")
+            print(f"❌ Both direct scraping and OpenRouter fallback failed for {request.url}", flush=True)
+            return {
+                "status": "error",
+                "message": "Website analysis failed: could not extract information from website"
+            }
 
         # Get extracted values from AI
         company_name = ai_extracted.get('company_name')
         value_proposition = ai_extracted.get('value_proposition')
         business_niche = ai_extracted.get('business_niche')
         tags = ai_extracted.get('tags')
+
+        # Set response_text if not already set (needed for company_description field)
+        if not response_text:
+            response_text = ai_extracted.get('company_description', f"AI-analyzed content for {request.url}")
 
         # Fallback: Extract company name from domain if AI didn't find it
         if not company_name:
