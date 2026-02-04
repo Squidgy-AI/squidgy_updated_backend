@@ -7786,7 +7786,7 @@ async def extract_text_from_file(
         logger.info(f"Extracted {len(extracted_text)} chars from {file_name}")
 
         # Chunk the text for embedding-safe sizes
-        chunks = processor.chunk_text(extracted_text, chunk_size=1500, chunk_overlap=200)
+        chunks = processor.chunk_text(extracted_text, chunk_size=4000, chunk_overlap=400)
 
         logger.info(f"Split into {len(chunks)} chunks for {file_name}")
 
@@ -8150,7 +8150,7 @@ async def extract_and_update_neon_record(
             raise Exception("No text content found in file")
         
         # Chunk the text
-        chunks = processor.chunk_text(extracted_text, chunk_size=1500, chunk_overlap=200)
+        chunks = processor.chunk_text(extracted_text, chunk_size=4000, chunk_overlap=400)
         logger.info(f"Extracted {len(extracted_text)} chars, {len(chunks)} chunks from {file_name}")
         update_file_status(file_id, "extracted", f"Extracted {len(chunks)} chunks from file", 40)
         
