@@ -175,12 +175,12 @@ class TextExtractor:
                         if page_text and page_text.strip():
                             # Clean up whitespace
                             cleaned_text = re.sub(r'[ \t]+', ' ', page_text)
-                            cleaned_text = re.sub(r'\n\s*\n', '\n\n', cleaned_text)
+                            cleaned_text = re.sub(r'\n\s*\n+', '\n', cleaned_text)
                             cleaned_lines = [line.rstrip() for line in cleaned_text.split('\n')]
                             cleaned_text = '\n'.join(cleaned_lines).strip()
-                            text_content.append(f"--- Page {i} ---\n{cleaned_text}")
+                            text_content.append(f"[Page {i}]\n{cleaned_text}")
                 
-                return '\n\n'.join(text_content).strip()
+                return '\n'.join(text_content).strip()
             except Exception as e:
                 logger.error(f"pdfplumber extraction error: {e}")
                 raise Exception(f"Failed to extract text from PDF: {str(e)}")
@@ -195,9 +195,10 @@ class TextExtractor:
                 for i, page in enumerate(pdf_reader.pages, 1):
                     page_text = page.extract_text()
                     if page_text and page_text.strip():
-                        text_content.append(f"--- Page {i} ---\n{page_text.strip()}")
+                        cleaned = re.sub(r'\n\s*\n+', '\n', page_text.strip())
+                        text_content.append(f"[Page {i}]\n{cleaned}")
                 
-                return '\n\n'.join(text_content).strip()
+                return '\n'.join(text_content).strip()
             except Exception as e:
                 logger.error(f"PyPDF2 extraction error: {e}")
                 raise Exception(f"Failed to extract text from PDF: {str(e)}")
@@ -365,7 +366,7 @@ class BackgroundTextProcessor:
             raise Exception(f"File download error: {str(e)}")
     
     @staticmethod
-    def chunk_text(text: str, chunk_size: int = 1500, chunk_overlap: int = 200) -> List[str]:
+    def chunk_text(text: str, chunk_size: int = 4000, chunk_overlap: int = 400) -> List[str]:
         """Split text into chunks with overlap, breaking at sentence/paragraph boundaries."""
         if not text or not text.strip():
             return []
