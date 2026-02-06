@@ -8783,6 +8783,18 @@ except Exception as e:
 # ============================================================================
 
 # ============================================================================
+# TEMPLATED.IO ROUTES
+# ============================================================================
+try:
+    from routes.templated_io import router as templated_router
+    app.include_router(templated_router)
+    logger.info("Templated.io routes loaded successfully")
+except ImportError as e:
+    logger.warning(f"Templated.io routes not available: {e}")
+except Exception as e:
+    logger.error(f"Error loading Templated.io routes: {e}")
+
+# ============================================================================
 # TWILIO SMS WEBHOOK
 # ============================================================================
 

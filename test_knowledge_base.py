@@ -25,7 +25,7 @@ NEON_DB_NAME = os.getenv('NEON_DB_NAME', 'neondb')
 OPENROUTER_API_KEY = os.getenv('OPENROUTER_API_KEY')
 
 # Optional filters
-TEST_USER_ID = os.getenv("TEST_USER_ID", "49fc9be9-786c-4007-a676-68dc541f384a")
+TEST_USER_ID = os.getenv("TEST_USER_ID", "68cd707e-0f47-4835-b235-90e94680231d")
 TEST_AGENT_ID = os.getenv("TEST_AGENT_ID", None)
 
 
@@ -418,20 +418,23 @@ async def semantic_search(query_text: str, user_id: str = None, agent_id: str = 
         # Build query with optional filters
         # Using cosine distance: 1 - (a <=> b) gives similarity score (1 = identical, 0 = orthogonal)
         where_clauses = ["embedding IS NOT NULL"]
-        params = [vector_str, limit]
-        param_idx = 3
+        params = [vector_str]
+        param_idx = 2
 
         if user_id:
             where_clauses.append(f"user_id = ${param_idx}")
-            params.insert(-1, user_id)
+            params.append(user_id)
             param_idx += 1
 
         if agent_id:
             where_clauses.append(f"agent_id = ${param_idx}")
-            params.insert(-1, agent_id)
+            params.append(agent_id)
             param_idx += 1
 
         where_clause = " AND ".join(where_clauses)
+        
+        # Add limit as the last parameter
+        params.append(limit)
 
         query = f"""
             SELECT 
@@ -446,7 +449,7 @@ async def semantic_search(query_text: str, user_id: str = None, agent_id: str = 
             FROM user_vector_knowledge_base
             WHERE {where_clause}
             ORDER BY embedding <=> $1::vector
-            LIMIT $2
+            LIMIT ${param_idx}
         """
 
         print("\n🔍 Searching knowledge base...")
@@ -621,8 +624,8 @@ async def interactive_mode():
             await run_custom_query(user_input)
         else:
             # Semantic search mode - parse optional filters
-            user_id = None
-            agent_id = None
+            user_id = TEST_USER_ID  # Use TEST_USER_ID by default
+            agent_id = TEST_AGENT_ID
             query_text = user_input
 
             # Parse @user: and @agent: filters
