@@ -183,8 +183,10 @@ async def get_all_templates(user_id: Optional[str] = None, tag: Optional[str] = 
 @router.get("/templates/{user_id}")
 async def get_templates_for_user(user_id: str):
     """
-    Get all templates and mark which ones are enabled for this user
-    (user_id is used as a tag on templates)
+    Get templates that are visible to this user.
+    Only returns templates that have either:
+    - "showeveryone" tag (visible to all users)
+    - user's business ID as a tag (visible to this specific user)
     """
     try:
         headers = get_templated_headers()
@@ -206,7 +208,15 @@ async def get_templates_for_user(user_id: str):
             data = response.json()
             template_list = data if isinstance(data, list) else data.get("response", data.get("data", data.get("templates", [])))
             
-            templates = [process_template(t, user_id) for t in template_list]
+            # Filter templates: only show if has "showeveryone" tag OR user's business ID tag
+            filtered_templates = []
+            for t in template_list:
+                tags = t.get("tags", [])
+                # Check if template has "showeveryone" tag or user's business ID tag
+                if "showeveryone" in tags or user_id in tags:
+                    filtered_templates.append(t)
+            
+            templates = [process_template(t, user_id) for t in filtered_templates]
             
             enabled_count = sum(1 for t in templates if t["isEnabled"])
             
