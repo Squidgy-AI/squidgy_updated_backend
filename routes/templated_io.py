@@ -212,18 +212,56 @@ async def get_templates_for_user(user_id: str):
             filtered_templates = []
             for t in template_list:
                 tags = t.get("tags", [])
-                # Check if template has "showeveryone" tag or user's business ID tag
                 if "showeveryone" in tags or user_id in tags:
                     filtered_templates.append(t)
             
-            templates = [process_template(t, user_id) for t in filtered_templates]
+            # Group templates by prefix (text before '-' in name)
+            groups = {}
+            for t in filtered_templates:
+                name = t.get("name", "")
+                if "-" in name:
+                    prefix = name.split("-")[0].strip()
+                else:
+                    prefix = name
+                
+                if prefix not in groups:
+                    groups[prefix] = []
+                groups[prefix].append(t)
             
-            enabled_count = sum(1 for t in templates if t["isEnabled"])
+            # Build grouped response
+            grouped_templates = []
+            for prefix, group_items in groups.items():
+                # Process all templates in the group (without groupTemplates to avoid recursion)
+                processed_items = []
+                for t in group_items:
+                    item = process_template(t, user_id)
+                    # Remove any nested group fields to prevent recursion
+                    item.pop("groupTemplates", None)
+                    item.pop("groupName", None)
+                    item.pop("groupCount", None)
+                    processed_items.append(item)
+                
+                # Find square template to use as representative (prefer "Square" in name)
+                representative = processed_items[0]  # Default to first
+                for item in processed_items:
+                    item_name = item.get("name", "").lower()
+                    if "square" in item_name:
+                        representative = item
+                        break
+                
+                main_template = dict(representative)  # Create a copy
+                main_template["groupName"] = prefix
+                main_template["groupTemplates"] = processed_items
+                main_template["groupCount"] = len(processed_items)
+                
+                grouped_templates.append(main_template)
+            
+            enabled_count = sum(1 for g in grouped_templates if g["isEnabled"])
             
             return {
                 "success": True,
-                "templates": templates,
-                "total": len(templates),
+                "templates": grouped_templates,
+                "total": len(grouped_templates),
                 "enabledCount": enabled_count,
                 "userId": user_id
             }
