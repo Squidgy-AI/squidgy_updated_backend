@@ -3807,6 +3807,35 @@ Provide ONLY valid JSON, no additional text."""
 
         logger.info(f"Analysis saved to database for {normalized_url}")
 
+        # ========== SAVE EXTRACTED CONTENT TO KNOWLEDGE BASE ==========
+        # Use shared save_content_to_knowledge_base function (same as file upload)
+        kb_document = f"""Website Analysis: {normalized_url}
+
+Company Name: {company_name or 'Unknown'}
+
+Company Description:
+{response_text or 'No description available'}
+
+Value Proposition:
+{value_proposition or 'Not specified'}
+
+Business Niche: {business_niche or 'Not specified'}
+
+Business Domain: {business_domain or 'Not specified'}
+
+Tags: {', '.join(tags) if tags else 'None'}
+"""
+        
+        kb_saved = await save_content_to_knowledge_base(
+            user_id=request.firm_user_id,
+            agent_id=request.agent_id,
+            content=kb_document,
+            source='website_analysis',
+            file_name=f"Website: {company_name or business_domain}",
+            file_url=normalized_url
+        )
+        # ========== END KNOWLEDGE BASE SAVE ==========
+
         # Fire THREE COMPLETELY SEPARATE independent async tasks
         # They run independently from each other - one failure won't affect the other
         # Uses asyncio.create_task() to run without blocking response
@@ -3863,6 +3892,7 @@ Provide ONLY valid JSON, no additional text."""
                     "brand_colors": []  # Will be populated by background task
                 },
                 "processing_assets": True,
+                "saved_to_kb": kb_saved,
                 "message": "Analysis completed. Screenshot, favicon, and brand colors are being captured in background."
             }
         else:
@@ -3880,6 +3910,7 @@ Provide ONLY valid JSON, no additional text."""
                     "brand_colors": []  # Will be populated by background task
                 },
                 "processing_assets": True,
+                "saved_to_kb": kb_saved,
                 "message": "Analysis completed. Screenshot, favicon, and brand colors are being captured in background."
             }
 
@@ -8102,6 +8133,189 @@ async def stream_file_status(file_id: str):
     )
 
 
+# =============================================================================
+# SHARED KB UTILITIES - Used by both file upload and website analysis
+# =============================================================================
+
+async def generate_embedding_for_kb(text: str) -> Optional[str]:
+    """
+    Generate embedding for text using OpenRouter API.
+    Returns formatted string for PostgreSQL vector, or None if failed.
+    
+    Used by:
+    - extract_and_update_neon_record (file uploads)
+    - save_content_to_knowledge_base (website analysis)
+    """
+    OPENROUTER_API_KEY = os.getenv('OPENROUTER_API_KEY')
+    
+    if not OPENROUTER_API_KEY:
+        logger.warning("OPENROUTER_API_KEY not set, skipping embedding generation")
+        return None
+    
+    try:
+        logger.info(f"Generating embedding for text ({len(text)} chars)...")
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                'https://openrouter.ai/api/v1/embeddings',
+                headers={
+                    'Authorization': f'Bearer {OPENROUTER_API_KEY}',
+                    'Content-Type': 'application/json'
+                },
+                json={
+                    'model': 'openai/text-embedding-3-small',
+                    'input': text[:8000]  # Limit input size
+                },
+                timeout=60.0
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                embedding = result.get('data', [{}])[0].get('embedding', [])
+                if embedding and len(embedding) > 0:
+                    # Format as PostgreSQL vector string: [0.1, 0.2, ...]
+                    vector_str = '[' + ','.join(str(x) for x in embedding) + ']'
+                    logger.info(f"Generated embedding with {len(embedding)} dimensions")
+                    return vector_str
+                else:
+                    logger.error(f"OpenRouter returned empty embedding")
+                    return None
+            else:
+                logger.error(f"OpenRouter embedding failed ({response.status_code}): {response.text}")
+                return None
+    except Exception as e:
+        logger.error(f"Embedding generation error: {str(e)}")
+        return None
+
+
+async def save_content_to_knowledge_base(
+    user_id: str,
+    agent_id: str,
+    content: str,
+    source: str,
+    file_name: str,
+    file_url: str,
+    chunk_size: int = 4000,
+    chunk_overlap: int = 400
+) -> bool:
+    """
+    Save content to user_vector_knowledge_base with chunking and embeddings.
+    
+    Used by:
+    - Website analysis endpoint
+    - Can be reused for other content types
+    
+    Args:
+        user_id: User ID (firm_user_id)
+        agent_id: Agent ID
+        content: Text content to save
+        source: Source identifier (e.g., 'website_analysis', 'file_upload')
+        file_name: Display name for the content
+        file_url: URL or identifier for the content
+        chunk_size: Size of each chunk (default 4000)
+        chunk_overlap: Overlap between chunks (default 400)
+    
+    Returns:
+        True if saved successfully, False otherwise
+    """
+    import asyncpg
+    
+    NEON_DB_HOST = os.getenv('NEON_DB_HOST')
+    NEON_DB_PORT = os.getenv('NEON_DB_PORT', '5432')
+    NEON_DB_USER = os.getenv('NEON_DB_USER')
+    NEON_DB_PASSWORD = os.getenv('NEON_DB_PASSWORD')
+    NEON_DB_NAME = os.getenv('NEON_DB_NAME', 'neondb')
+    
+    if not all([NEON_DB_HOST, NEON_DB_USER, NEON_DB_PASSWORD]):
+        logger.warning("Neon DB config missing - cannot save to KB")
+        return False
+    
+    conn = None
+    try:
+        # Chunk the content using same logic as file upload
+        processor = get_background_processor()
+        if processor:
+            chunks = processor.chunk_text(content, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+        else:
+            # Fallback: simple chunking if processor not available
+            chunks = [content[i:i + chunk_size] for i in range(0, len(content), chunk_size - chunk_overlap)]
+            if not chunks:
+                chunks = [content]
+        
+        logger.info(f"Chunked content into {len(chunks)} chunks for KB save")
+        
+        conn = await asyncpg.connect(
+            host=NEON_DB_HOST,
+            port=int(NEON_DB_PORT),
+            user=NEON_DB_USER,
+            password=NEON_DB_PASSWORD,
+            database=NEON_DB_NAME,
+            ssl='require'
+        )
+        
+        total_chunks = len(chunks)
+        created_at = datetime.utcnow()
+        
+        for i, chunk in enumerate(chunks, start=1):
+            if not chunk.strip():
+                continue
+            
+            # Format document like file upload: "Source: {name} [Part X/Y]\n\n{chunk}"
+            formatted_doc = f"{file_name} [Part {i}/{total_chunks}]\n\n{chunk}"
+            
+            # Generate embedding
+            embedding = await generate_embedding_for_kb(chunk)
+            
+            if embedding:
+                insert_query = """
+                    INSERT INTO user_vector_knowledge_base
+                    (user_id, agent_id, document, embedding, category, source, file_name, file_url, created_at, updated_at)
+                    VALUES ($1, $2, $3, $4::vector, $5, $6, $7, $8, $9, $10)
+                """
+                await conn.execute(
+                    insert_query,
+                    user_id,
+                    agent_id,
+                    formatted_doc,
+                    embedding,
+                    'documents',
+                    source,
+                    file_name,
+                    file_url,
+                    created_at,
+                    created_at
+                )
+            else:
+                insert_query = """
+                    INSERT INTO user_vector_knowledge_base
+                    (user_id, agent_id, document, category, source, file_name, file_url, created_at, updated_at)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                """
+                await conn.execute(
+                    insert_query,
+                    user_id,
+                    agent_id,
+                    formatted_doc,
+                    'documents',
+                    source,
+                    file_name,
+                    file_url,
+                    created_at,
+                    created_at
+                )
+            
+            logger.info(f"Saved chunk {i}/{total_chunks} to KB for {file_name}")
+        
+        logger.info(f"✓ Successfully saved {total_chunks} chunks to KB for user {user_id}, agent {agent_id}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Failed to save content to KB: {str(e)}")
+        return False
+    finally:
+        if conn:
+            await conn.close()
+
+
 async def extract_and_update_neon_record(
     file_id: str,
     file_url: str,
@@ -8829,6 +9043,74 @@ async def receive_twilio_sms(request: Request):
 
 # ============================================================================
 # END TWILIO SMS WEBHOOK
+# ============================================================================
+
+# ============================================================================
+# AGENT ENABLEMENT NOTIFICATION ENDPOINT
+# ============================================================================
+
+class AgentEnablementNotification(BaseModel):
+    user_id: str
+    agent_id: str
+    agent_name: Optional[str] = None
+    action: str = "enabled"  # enabled, disabled, updated
+
+@app.post("/api/agents/notify-enablement")
+async def notify_agent_enablement(request: AgentEnablementNotification):
+    """
+    Endpoint for n8n to call after enabling an agent.
+    This triggers a Supabase Realtime broadcast to notify the frontend to refresh the sidebar.
+    
+    The frontend already subscribes to assistant_personalizations table changes,
+    so this endpoint just confirms the action and can be used for logging/auditing.
+    """
+    try:
+        user_id = request.user_id
+        agent_id = request.agent_id
+        agent_name = request.agent_name or agent_id
+        action = request.action
+        
+        logger.info(f"🔔 Agent enablement notification: user={user_id}, agent={agent_id}, action={action}")
+        print(f"🔔 Agent enablement notification: user={user_id}, agent={agent_id}, action={action}")
+        
+        # Verify the agent was actually enabled in the database
+        result = supabase.table('assistant_personalizations')\
+            .select('*')\
+            .eq('user_id', user_id)\
+            .eq('assistant_id', agent_id)\
+            .execute()
+        
+        if result.data:
+            agent_record = result.data[0]
+            is_enabled = agent_record.get('is_enabled', False)
+            
+            return {
+                "success": True,
+                "message": f"Agent {agent_name} {action} successfully",
+                "user_id": user_id,
+                "agent_id": agent_id,
+                "is_enabled": is_enabled,
+                "notification_sent": True
+            }
+        else:
+            return {
+                "success": False,
+                "message": f"Agent {agent_id} not found in database for user {user_id}",
+                "user_id": user_id,
+                "agent_id": agent_id,
+                "notification_sent": False
+            }
+            
+    except Exception as e:
+        logger.error(f"❌ Error in agent enablement notification: {str(e)}")
+        return {
+            "success": False,
+            "message": f"Error: {str(e)}",
+            "notification_sent": False
+        }
+
+# ============================================================================
+# END AGENT ENABLEMENT NOTIFICATION
 # ============================================================================
 
 app.add_middleware(
