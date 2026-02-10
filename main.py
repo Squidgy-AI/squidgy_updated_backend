@@ -9059,10 +9059,7 @@ class AgentEnablementNotification(BaseModel):
 async def notify_agent_enablement(request: AgentEnablementNotification):
     """
     Endpoint for n8n to call after enabling an agent.
-    This triggers a Supabase Realtime broadcast to notify the frontend to refresh the sidebar.
-    
-    The frontend already subscribes to assistant_personalizations table changes,
-    so this endpoint just confirms the action and can be used for logging/auditing.
+    Broadcasts via Supabase Realtime to force frontend sidebar refresh.
     """
     try:
         user_id = request.user_id
@@ -9083,6 +9080,42 @@ async def notify_agent_enablement(request: AgentEnablementNotification):
         if result.data:
             agent_record = result.data[0]
             is_enabled = agent_record.get('is_enabled', False)
+            
+            # Broadcast refresh signal via Supabase Realtime
+            # Frontend listens to channel: agent-refresh-{user_id}
+            try:
+                import httpx
+                supabase_url = os.getenv('SUPABASE_URL') or os.getenv('VITE_SUPABASE_URL')
+                supabase_key = os.getenv('SUPABASE_SERVICE_ROLE_KEY') or os.getenv('SUPABASE_KEY') or os.getenv('VITE_SUPABASE_ANON_KEY')
+                
+                if supabase_url and supabase_key:
+                    # Use Supabase Realtime broadcast via REST API
+                    broadcast_url = f"{supabase_url}/realtime/v1/api/broadcast"
+                    async with httpx.AsyncClient() as client:
+                        broadcast_response = await client.post(
+                            broadcast_url,
+                            headers={
+                                'apikey': supabase_key,
+                                'Authorization': f'Bearer {supabase_key}',
+                                'Content-Type': 'application/json'
+                            },
+                            json={
+                                'messages': [{
+                                    'topic': f'agent-refresh-{user_id}',
+                                    'event': 'refresh_sidebar',
+                                    'payload': {
+                                        'user_id': user_id,
+                                        'agent_id': agent_id,
+                                        'action': action,
+                                        'timestamp': datetime.now(timezone.utc).isoformat()
+                                    }
+                                }]
+                            },
+                            timeout=10.0
+                        )
+                        logger.info(f"📡 Broadcast sent: status={broadcast_response.status_code}")
+            except Exception as broadcast_error:
+                logger.warning(f"⚠️ Broadcast failed (non-critical): {broadcast_error}")
             
             return {
                 "success": True,
