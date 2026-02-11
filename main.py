@@ -7783,18 +7783,28 @@ async def process_file_from_url(
 async def extract_text_from_file(
     file_url: str = Form(...),
     file_name: str = Form(...),
+    user_id: Optional[str] = Form(None),
+    agent_id: Optional[str] = Form(None),
+    save_to_kb: Optional[bool] = Form(False),
 ):
     """
-    Synchronous text extraction from a file URL.
+    Text extraction from a file URL with optional embedding generation and Neon KB save.
     Called by n8n workflow to extract text from PDF, DOCX, JSON, TXT, MD files.
 
     Parameters:
     - file_url: Supabase storage URL (or any public URL)
     - file_name: Original filename (used to detect file type by extension)
+    - user_id: (Optional) User ID for saving to knowledge base
+    - agent_id: (Optional) Agent ID for saving to knowledge base
+    - save_to_kb: (Optional) If true, generates embeddings and saves to Neon KB
 
     Returns:
     - extracted_text: The extracted text content
+    - chunks: Text split into embedding-safe chunks
+    - kb_saved: Whether content was saved to knowledge base (if save_to_kb=true)
     """
+    import asyncpg
+    
     try:
         logger.info(f"Extract-text request: {file_name} from {file_url[:80]}...")
 
@@ -7821,6 +7831,19 @@ async def extract_text_from_file(
 
         logger.info(f"Split into {len(chunks)} chunks for {file_name}")
 
+        # If save_to_kb is true and we have user_id + agent_id, use shared function to save to KB
+        kb_saved = False
+        
+        if save_to_kb and user_id and agent_id:
+            kb_saved = await save_content_to_knowledge_base(
+                user_id=user_id,
+                agent_id=agent_id,
+                content=extracted_text,
+                source='chat_file_upload',
+                file_name=file_name,
+                file_url=file_url
+            )
+
         return {
             "success": True,
             "file_name": file_name,
@@ -7828,6 +7851,7 @@ async def extract_text_from_file(
             "chunks": chunks,
             "chunk_count": len(chunks),
             "char_count": len(extracted_text),
+            "kb_saved": kb_saved,
         }
 
     except HTTPException:
@@ -8368,48 +8392,7 @@ async def extract_and_update_neon_record(
         logger.info(f"Extracted {len(extracted_text)} chars, {len(chunks)} chunks from {file_name}")
         update_file_status(file_id, "extracted", f"Extracted {len(chunks)} chunks from file", 40)
         
-        # Step 2: Generate embeddings using OpenRouter API
-        async def generate_embedding(text: str) -> str:
-            """Generate embedding for text using OpenRouter API, returns formatted string for PostgreSQL vector"""
-            if not OPENROUTER_API_KEY:
-                logger.warning("OPENROUTER_API_KEY not set, skipping embedding generation")
-                return None
-            
-            try:
-                logger.info(f"Generating embedding for text ({len(text)} chars)...")
-                async with httpx.AsyncClient() as client:
-                    response = await client.post(
-                        'https://openrouter.ai/api/v1/embeddings',
-                        headers={
-                            'Authorization': f'Bearer {OPENROUTER_API_KEY}',
-                            'Content-Type': 'application/json'
-                        },
-                        json={
-                            'model': 'openai/text-embedding-3-small',
-                            'input': text[:8000]  # Limit input size
-                        },
-                        timeout=60.0
-                    )
-                    
-                    if response.status_code == 200:
-                        result = response.json()
-                        embedding = result.get('data', [{}])[0].get('embedding', [])
-                        if embedding and len(embedding) > 0:
-                            # Format as PostgreSQL vector string: [0.1, 0.2, ...]
-                            vector_str = '[' + ','.join(str(x) for x in embedding) + ']'
-                            logger.info(f"Generated embedding with {len(embedding)} dimensions")
-                            return vector_str
-                        else:
-                            logger.error(f"OpenRouter returned empty embedding")
-                            return None
-                    else:
-                        logger.error(f"OpenRouter embedding failed ({response.status_code}): {response.text}")
-                        return None
-            except Exception as e:
-                logger.error(f"Embedding generation error: {str(e)}")
-                return None
-        
-        # Step 3: Connect to Neon database
+        # Step 2: Connect to Neon database (using shared generate_embedding_for_kb function)
         conn = await asyncpg.connect(
             host=NEON_DB_HOST,
             port=int(NEON_DB_PORT),
@@ -8428,7 +8411,7 @@ async def extract_and_update_neon_record(
             first_chunk_text = chunks[0] if chunks[0].strip() else ""
             formatted_doc = f"File: {file_name} [Part 1/{total_chunks}]\n\n{first_chunk_text}"
             
-            embedding = await generate_embedding(first_chunk_text)
+            embedding = await generate_embedding_for_kb(first_chunk_text)
             
             if embedding:
                 # Update with text and embedding
@@ -8470,7 +8453,7 @@ async def extract_and_update_neon_record(
                     
                     # Format document like n8n
                     formatted_chunk = f"File: {file_name} [Part {i}/{total_chunks}]\n\n{chunk}"
-                    chunk_embedding = await generate_embedding(chunk)
+                    chunk_embedding = await generate_embedding_for_kb(chunk)
                     
                     if chunk_embedding:
                         insert_query = """
