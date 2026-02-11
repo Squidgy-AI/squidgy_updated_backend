@@ -23,7 +23,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, HTMLResponse
 from twilio.twiml.messaging_response import MessagingResponse as TwilioMessagingResponse
 # from openai import OpenAI
-from pydantic import BaseModel
+from pydantic import BaseModel, validator
+from typing import Union
 from supabase import create_client, Client
 from PIL import Image
 
@@ -7784,7 +7785,15 @@ class FileExtractionRequest(BaseModel):
     file_name: str
     user_id: Optional[str] = None
     agent_id: Optional[str] = None
-    save_to_kb: Optional[bool] = False
+    save_to_kb: Optional[Union[bool, str]] = False
+    
+    @validator('save_to_kb', pre=True)
+    def parse_save_to_kb(cls, v):
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, str):
+            return v.lower() in ('true', '1', 'yes')
+        return False
 
 
 @app.post("/api/file/extract-text")
@@ -7812,6 +7821,9 @@ async def extract_text_from_file(request: FileExtractionRequest):
     user_id = request.user_id
     agent_id = request.agent_id
     save_to_kb = request.save_to_kb
+    
+    # Log all received parameters for debugging
+    logger.info(f"Extract-text received: file_name={file_name}, user_id={user_id}, agent_id={agent_id}, save_to_kb={save_to_kb} (type: {type(save_to_kb).__name__})")
     
     try:
         logger.info(f"Extract-text request: {file_name} from {file_url[:80]}...")
@@ -7843,6 +7855,7 @@ async def extract_text_from_file(request: FileExtractionRequest):
         kb_saved = False
         
         if save_to_kb and user_id and agent_id:
+            logger.info(f"Attempting to save to KB: user_id={user_id}, agent_id={agent_id}, file_name={file_name}")
             kb_saved = await save_content_to_knowledge_base(
                 user_id=user_id,
                 agent_id=agent_id,
@@ -7851,13 +7864,12 @@ async def extract_text_from_file(request: FileExtractionRequest):
                 file_name=file_name,
                 file_url=file_url
             )
+            logger.info(f"KB save result: {kb_saved}")
 
         return {
             "success": True,
             "file_name": file_name,
             "extracted_text": extracted_text,
-            "chunks": chunks,
-            "chunk_count": len(chunks),
             "char_count": len(extracted_text),
             "kb_saved": kb_saved,
         }
