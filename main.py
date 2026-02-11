@@ -7779,14 +7779,16 @@ async def process_file_from_url(
         logger.error(f"Error in file processing endpoint: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
+class FileExtractionRequest(BaseModel):
+    file_url: str
+    file_name: str
+    user_id: Optional[str] = None
+    agent_id: Optional[str] = None
+    save_to_kb: Optional[bool] = False
+
+
 @app.post("/api/file/extract-text")
-async def extract_text_from_file(
-    file_url: str = Form(...),
-    file_name: str = Form(...),
-    user_id: Optional[str] = Form(None),
-    agent_id: Optional[str] = Form(None),
-    save_to_kb: Optional[bool] = Form(False),
-):
+async def extract_text_from_file(request: FileExtractionRequest):
     """
     Text extraction from a file URL with optional embedding generation and Neon KB save.
     Called by n8n workflow to extract text from PDF, DOCX, JSON, TXT, MD files.
@@ -7804,6 +7806,12 @@ async def extract_text_from_file(
     - kb_saved: Whether content was saved to knowledge base (if save_to_kb=true)
     """
     import asyncpg
+    
+    file_url = request.file_url
+    file_name = request.file_name
+    user_id = request.user_id
+    agent_id = request.agent_id
+    save_to_kb = request.save_to_kb
     
     try:
         logger.info(f"Extract-text request: {file_name} from {file_url[:80]}...")
