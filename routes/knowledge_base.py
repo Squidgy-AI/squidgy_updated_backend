@@ -819,7 +819,7 @@ async def semantic_search(request: SemanticSearchRequest = Body(...)):
         for row in rows:
             results.append(SearchResult(
                 id=str(row['id']),
-                user_id=row['user_id'],
+                user_id=str(row['user_id']),
                 agent_id=row['agent_id'],
                 category=row['category'],
                 file_name=row['file_name'],
