@@ -25,7 +25,7 @@ NEON_DB_NAME = os.getenv('NEON_DB_NAME', 'neondb')
 OPENROUTER_API_KEY = os.getenv('OPENROUTER_API_KEY')
 
 # Optional filters
-TEST_USER_ID = os.getenv("TEST_USER_ID", "68cd707e-0f47-4835-b235-90e94680231d")
+TEST_USER_ID = os.getenv("TEST_USER_ID", "61a0306e-2018-4c86-99f8-6287e12fd1ce")
 TEST_AGENT_ID = os.getenv("TEST_AGENT_ID", None)
 
 
@@ -646,7 +646,7 @@ async def interactive_mode():
                 continue
 
             # Run semantic search
-            await semantic_search(query_text, user_id=user_id, agent_id=agent_id, limit=5)
+            await semantic_search(query_text, user_id=user_id, agent_id=agent_id, limit=50)
 
 
 if __name__ == "__main__":

@@ -12,6 +12,7 @@ import asyncpg
 from datetime import datetime
 from supabase import create_client, Client
 import uuid as uuid_lib
+import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +82,32 @@ class FileUploadResponse(BaseModel):
 class DeleteResponse(BaseModel):
     success: bool
     message: str
+
+
+class SemanticSearchRequest(BaseModel):
+    query: str
+    user_id: str
+    agent_id: Optional[str] = None
+    limit: Optional[int] = 5
+    similarity_threshold: Optional[float] = 0.0
+
+
+class SearchResult(BaseModel):
+    id: str
+    user_id: str
+    agent_id: str
+    category: str
+    file_name: Optional[str]
+    document: str
+    similarity: float
+    created_at: datetime
+
+
+class SemanticSearchResponse(BaseModel):
+    success: bool
+    query: str
+    results: List[SearchResult]
+    count: int
 
 
 # ============================================================================
@@ -643,6 +670,180 @@ async def delete_file(file_id: str, file_url: Optional[str] = None):
     except Exception as e:
         logger.error(f"Error deleting file: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to delete file: {str(e)}")
+    finally:
+        if conn:
+            await conn.close()
+
+
+# ============================================================================
+# SEMANTIC SEARCH - Vector Similarity Search
+# ============================================================================
+
+async def generate_query_embedding(text: str) -> Optional[list]:
+    """
+    Generate embedding for search query using OpenRouter API.
+    Uses openai/text-embedding-3-small model (1536 dimensions).
+    Returns list of floats (embedding vector).
+    """
+    OPENROUTER_API_KEY = os.getenv('OPENROUTER_API_KEY')
+    
+    if not OPENROUTER_API_KEY:
+        logger.warning("OPENROUTER_API_KEY not set, cannot generate embedding")
+        return None
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                'https://openrouter.ai/api/v1/embeddings',
+                headers={
+                    'Authorization': f'Bearer {OPENROUTER_API_KEY}',
+                    'Content-Type': 'application/json'
+                },
+                json={
+                    'model': 'openai/text-embedding-3-small',
+                    'input': text[:8000]  # Limit input size
+                },
+                timeout=60.0
+            )
+
+            if response.status_code == 200:
+                result = response.json()
+                embedding = result.get('data', [{}])[0].get('embedding', [])
+                if embedding and len(embedding) > 0:
+                    logger.info(f"Generated query embedding ({len(embedding)} dimensions)")
+                    return embedding
+                else:
+                    logger.error("OpenRouter returned empty embedding")
+                    return None
+            else:
+                logger.error(f"OpenRouter embedding failed ({response.status_code}): {response.text}")
+                return None
+    except Exception as e:
+        logger.error(f"Embedding generation error: {str(e)}")
+        return None
+
+
+@router.post("/search", response_model=SemanticSearchResponse)
+async def semantic_search(request: SemanticSearchRequest = Body(...)):
+    """
+    Semantic search using vector similarity (cosine distance).
+    
+    This endpoint allows AI agents to search the knowledge base using natural language queries.
+    
+    Process:
+    1. Generates embedding for the query text using OpenRouter API
+    2. Finds most similar documents using pgvector cosine distance
+    3. Returns ranked results with similarity scores
+    
+    Args:
+        request: SemanticSearchRequest with query, user_id, optional agent_id, limit, and similarity_threshold
+    
+    Returns:
+        SemanticSearchResponse with ranked search results
+    
+    Example:
+        POST /api/knowledge-base/search
+        {
+            "query": "What are the company's marketing strategies?",
+            "user_id": "user-123",
+            "agent_id": "personal_assistant",
+            "limit": 5,
+            "similarity_threshold": 0.7
+        }
+    """
+    conn = None
+    try:
+        logger.info(f"Semantic search: query='{request.query}', user_id={request.user_id}, agent_id={request.agent_id}")
+        
+        # Step 1: Generate embedding for query
+        query_embedding = await generate_query_embedding(request.query)
+        
+        if not query_embedding:
+            raise HTTPException(status_code=500, detail="Failed to generate embedding for query")
+
+        # Step 2: Connect to database
+        conn = await get_db_connection()
+
+        # Step 3: Build query with optional filters
+        # Using cosine distance: 1 - (a <=> b) gives similarity score (1 = identical, 0 = orthogonal)
+        where_clauses = ["embedding IS NOT NULL"]
+        params = []
+        param_idx = 1
+
+        # Format embedding as PostgreSQL vector string
+        vector_str = '[' + ','.join(str(x) for x in query_embedding) + ']'
+        params.append(vector_str)
+        param_idx += 1
+
+        # Add user_id filter
+        where_clauses.append(f"user_id = ${param_idx}")
+        params.append(request.user_id)
+        param_idx += 1
+
+        # Add optional agent_id filter
+        if request.agent_id:
+            where_clauses.append(f"agent_id = ${param_idx}")
+            params.append(request.agent_id)
+            param_idx += 1
+
+        # Add similarity threshold filter
+        if request.similarity_threshold > 0:
+            where_clauses.append(f"(1 - (embedding <=> $1::vector)) >= {request.similarity_threshold}")
+
+        where_clause = " AND ".join(where_clauses)
+        
+        # Add limit as the last parameter
+        params.append(request.limit)
+
+        query = f"""
+            SELECT 
+                id,
+                user_id,
+                agent_id,
+                category,
+                file_name,
+                document,
+                created_at,
+                1 - (embedding <=> $1::vector) as similarity
+            FROM user_vector_knowledge_base
+            WHERE {where_clause}
+            ORDER BY embedding <=> $1::vector
+            LIMIT ${param_idx}
+        """
+
+        logger.info(f"Executing semantic search with {len(params)} parameters")
+        rows = await conn.fetch(query, *params)
+
+        # Step 4: Format results
+        results = []
+        for row in rows:
+            results.append(SearchResult(
+                id=str(row['id']),
+                user_id=row['user_id'],
+                agent_id=row['agent_id'],
+                category=row['category'],
+                file_name=row['file_name'],
+                document=row['document'],
+                similarity=float(row['similarity']),
+                created_at=row['created_at']
+            ))
+
+        logger.info(f"Semantic search found {len(results)} results for user {request.user_id}")
+
+        return SemanticSearchResponse(
+            success=True,
+            query=request.query,
+            results=results,
+            count=len(results)
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Semantic search failed: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
     finally:
         if conn:
             await conn.close()
