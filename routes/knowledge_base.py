@@ -93,9 +93,6 @@ class SemanticSearchRequest(BaseModel):
 
 
 class SearchResult(BaseModel):
-    id: str
-    user_id: str
-    agent_id: str
     category: str
     file_name: Optional[str]
     document: str
@@ -818,9 +815,6 @@ async def semantic_search(request: SemanticSearchRequest = Body(...)):
         results = []
         for row in rows:
             results.append(SearchResult(
-                id=str(row['id']),
-                user_id=str(row['user_id']),
-                agent_id=row['agent_id'],
                 category=row['category'],
                 file_name=row['file_name'],
                 document=row['document'],
