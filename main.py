@@ -5781,6 +5781,182 @@ async def trigger_pit_automation(ghl_record_id: str):
         logger.error(f"Error triggering PIT automation: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/api/ghl/retry-automation")
+async def retry_ghl_automation(request: dict):
+    """
+    Retry GHL automation for a failed setup.
+    This will retry soma_ghl_user creation if needed, then trigger browser automation.
+    """
+    try:
+        firm_user_id = request.get('firm_user_id')
+        
+        if not firm_user_id:
+            raise HTTPException(status_code=400, detail="firm_user_id is required")
+        
+        # Get GHL subaccount details
+        ghl_result = supabase.table('ghl_subaccounts')\
+            .select('*')\
+            .eq('firm_user_id', firm_user_id)\
+            .single()\
+            .execute()
+        
+        if not ghl_result.data:
+            raise HTTPException(status_code=404, detail=f"GHL record not found for user: {firm_user_id}")
+        
+        ghl_data = ghl_result.data
+        ghl_record_id = ghl_data['id']
+        location_id = ghl_data.get('ghl_location_id')
+        
+        if not location_id:
+            raise HTTPException(status_code=400, detail="Location ID not found - subaccount may not have been created")
+        
+        # Check if soma_ghl_user needs to be created
+        soma_user_id = ghl_data.get('soma_ghl_user_id')
+        soma_email = ghl_data.get('soma_ghl_email')
+        
+        if not soma_user_id:
+            # Generate unique email for Soma (same format as original)
+            soma_email = f"somashekhar34+{location_id[:8]}@gmail.com"
+            
+            # Get GHL credentials
+            agency_token = os.getenv("GHL_AGENCY_TOKEN", "pit-e3d8d384-00cb-4744-8213-b1ab06ae71fe")
+            company_id = os.getenv("GHL_COMPANY_ID", "lp2p1q27DrdGta1qGDJd")
+            
+            # Full permissions (same as original)
+            full_permissions = {
+                "campaignsEnabled": True,
+                "campaignsReadOnly": False,
+                "contactsEnabled": True,
+                "workflowsEnabled": True,
+                "triggersEnabled": True,
+                "funnelsEnabled": True,
+                "websitesEnabled": True,
+                "opportunitiesEnabled": True,
+                "dashboardStatsEnabled": True,
+                "bulkRequestsEnabled": True,
+                "appointmentsEnabled": True,
+                "reviewsEnabled": True,
+                "onlineListingsEnabled": True,
+                "phoneCallEnabled": True,
+                "conversationsEnabled": True,
+                "assignedDataOnly": False,
+                "adwordsReportingEnabled": True,
+                "membershipEnabled": True,
+                "facebookAdsReportingEnabled": True,
+                "attributionsReportingEnabled": True,
+                "settingsEnabled": True,
+                "tagsEnabled": True,
+                "leadValueEnabled": True,
+                "marketingEnabled": True,
+                "agentReportingEnabled": True,
+                "botService": True,
+                "socialPlanner": True,
+                "bloggingEnabled": True,
+                "invoiceEnabled": True,
+                "affiliateManagerEnabled": True,
+                "contentAiEnabled": True,
+                "refundsEnabled": True,
+                "recordPaymentEnabled": True,
+                "cancelSubscriptionEnabled": True,
+                "paymentsEnabled": True,
+                "communitiesEnabled": True,
+                "exportPaymentsEnabled": True
+            }
+            
+            # Create soma user using the existing helper function
+            try:
+                soma_user_response = await create_agency_user(
+                    company_id=company_id,
+                    location_id=location_id,
+                    agency_token=agency_token,
+                    first_name="Soma",
+                    last_name="Addakula",
+                    email=soma_email,
+                    password="Dummy@123",
+                    phone="+17166044029",
+                    role="admin",
+                    permissions=full_permissions
+                )
+                
+                if soma_user_response.get("status") == "success":
+                    soma_user_id = soma_user_response.get("user_id")
+                    
+                    # Update database
+                    supabase.table('ghl_subaccounts').update({
+                        'soma_ghl_user_id': soma_user_id,
+                        'soma_ghl_email': soma_email,
+                        'soma_ghl_password': "Dummy@123",
+                        'soma_user_created_at': datetime.now().isoformat(),
+                        'creation_status': 'created',
+                        'creation_error': None,
+                        'updated_at': datetime.now().isoformat()
+                    }).eq('id', ghl_record_id).execute()
+                else:
+                    error_msg = f"Failed to create soma user: {soma_user_response}"
+                    
+                    supabase.table('ghl_subaccounts').update({
+                        'creation_status': 'failed',
+                        'creation_error': error_msg,
+                        'updated_at': datetime.now().isoformat()
+                    }).eq('id', ghl_record_id).execute()
+                    
+                    raise HTTPException(status_code=500, detail=error_msg)
+                    
+            except Exception as e:
+                error_msg = f"Error creating soma user: {str(e)}"
+                raise HTTPException(status_code=500, detail=error_msg)
+        else:
+            soma_email = ghl_data.get('soma_ghl_email')
+        
+        # Trigger browser automation to capture firebase_token
+        automation_service_url = os.getenv('AUTOMATION_USER1_SERVICE_URL', 'https://backgroundautomationuser1-1644057ede7b.herokuapp.com')
+        
+        # Update status
+        supabase.table('ghl_subaccounts').update({
+            'automation_status': 'running',
+            'automation_error': None,
+            'updated_at': datetime.now().isoformat()
+        }).eq('id', ghl_record_id).execute()
+        
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            response = await client.post(
+                f"{automation_service_url}/ghl/complete-automation",
+                json={
+                    "location_id": location_id,
+                    "email": soma_email or ghl_data.get('soma_ghl_email'),
+                    "password": "Dummy@123",
+                    "firm_user_id": firm_user_id,
+                    "ghl_user_id": soma_user_id
+                }
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                
+                return {
+                    "success": True,
+                    "message": "GHL automation retry started",
+                    "firm_user_id": firm_user_id,
+                    "location_id": location_id,
+                    "soma_user_id": soma_user_id,
+                    "status": "running"
+                }
+            else:
+                error_msg = f"Automation service error: {response.status_code} - {response.text}"
+                
+                supabase.table('ghl_subaccounts').update({
+                    'automation_status': 'failed',
+                    'automation_error': error_msg,
+                    'updated_at': datetime.now().isoformat()
+                }).eq('id', ghl_record_id).execute()
+                
+                raise HTTPException(status_code=500, detail=error_msg)
+                
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/api/ghl/refresh-tokens/{firm_user_id}")
 async def refresh_ghl_tokens(firm_user_id: str, agent_id: str = "SOL"):
     """
