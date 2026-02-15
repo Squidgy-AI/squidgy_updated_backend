@@ -9138,6 +9138,18 @@ except Exception as e:
     logger.error(f"Error loading Social Media Instagram routes: {e}")
 
 # ============================================================================
+# SOCIAL MEDIA ROUTES - SLACK
+# ============================================================================
+try:
+    from GHL_Marketing.social_slack import router as social_slack_router
+    app.include_router(social_slack_router)
+    logger.info("Social Media Slack routes loaded successfully")
+except ImportError as e:
+    logger.warning(f"Social Media Slack routes not available: {e}")
+except Exception as e:
+    logger.error(f"Error loading Social Media Slack routes: {e}")
+
+# ============================================================================
 # MCP (Model Context Protocol) INTEGRATION
 # ============================================================================
 
