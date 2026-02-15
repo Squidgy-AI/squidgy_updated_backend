@@ -296,7 +296,7 @@ async def disconnect_slack_workspace(request: dict):
         # Call GHL API to delete integration
         async with httpx.AsyncClient() as client:
             response = await client.delete(
-                f"https://api.leadconnectorhq.com/slack/{location_id}/integrations/{integration_id}",
+                f"https://api.leadconnectorhq.com/slack/{location_id}/oauth-delete/{integration_id}",
                 headers={
                     "Accept": "application/json",
                     "Authorization": f"Bearer {access_token}" if access_token else "",
