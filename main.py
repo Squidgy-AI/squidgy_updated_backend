@@ -9200,6 +9200,18 @@ except Exception as e:
     logger.error(f"Error loading Templated.io routes: {e}")
 
 # ============================================================================
+# POSTHOG ANALYTICS ROUTES
+# ============================================================================
+try:
+    from routes.analytics import router as analytics_router
+    app.include_router(analytics_router)
+    logger.info("PostHog Analytics routes loaded successfully")
+except ImportError as e:
+    logger.warning(f"PostHog Analytics routes not available: {e}")
+except Exception as e:
+    logger.error(f"Error loading PostHog Analytics routes: {e}")
+
+# ============================================================================
 # TWILIO SMS WEBHOOK
 # ============================================================================
 
