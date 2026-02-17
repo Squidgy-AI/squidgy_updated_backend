@@ -9212,6 +9212,18 @@ except Exception as e:
     logger.error(f"Error loading PostHog Analytics routes: {e}")
 
 # ============================================================================
+# ADMIN ROUTES
+# ============================================================================
+try:
+    from routes.admin import router as admin_router
+    app.include_router(admin_router)
+    logger.info("Admin routes loaded successfully")
+except ImportError as e:
+    logger.warning(f"Admin routes not available: {e}")
+except Exception as e:
+    logger.error(f"Error loading Admin routes: {e}")
+
+# ============================================================================
 # TWILIO SMS WEBHOOK
 # ============================================================================
 
