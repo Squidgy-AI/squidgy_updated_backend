@@ -1892,7 +1892,7 @@ async def get_application_logs(limit: int = 50):
 async def websocket_endpoint(websocket: WebSocket, user_id: str, session_id: str):
     """WebSocket endpoint that routes through n8n with streaming support"""
     connection_id = f"{user_id}_{session_id}"
-    logger.info(f"New WebSocket connection: {connection_id}")
+    logger.debug(f"New WebSocket connection: {connection_id}")
     
     await websocket.accept()
     
@@ -2010,7 +2010,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str, session_id: str
                 continue
                 
     except WebSocketDisconnect:
-        logger.info(f"Client disconnected: {connection_id}")
+        logger.debug(f"Client disconnected: {connection_id}")
     
     except ConnectionResetError as conn_err:
         logger.warning(f"Connection reset for {connection_id}: {str(conn_err)}")
@@ -2024,7 +2024,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str, session_id: str
         # Remove connection from active connections
         if connection_id in active_connections:
             del active_connections[connection_id]
-        logger.info(f"WebSocket connection closed and cleaned up: {connection_id}")
+        logger.debug(f"WebSocket connection closed and cleaned up: {connection_id}")
 
 
 def extract_image_urls(text: str) -> List[str]:
