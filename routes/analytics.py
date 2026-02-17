@@ -290,3 +290,128 @@ async def get_retention_data(
             "error": str(e),
             "data": {}
         }
+
+
+@router.get("/user-activity")
+async def get_user_activity(
+    email: str,
+    authorization: Optional[str] = Header(None)
+):
+    """Get activity data for a specific user by email"""
+    if not POSTHOG_API_KEY or not POSTHOG_PROJECT_ID:
+        return {
+            "success": False,
+            "error": "PostHog not configured",
+            "data": {}
+        }
+    
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            headers = {
+                "Authorization": f"Bearer {POSTHOG_API_KEY}",
+                "Content-Type": "application/json"
+            }
+            base_url = f"{POSTHOG_HOST}/api/projects/{POSTHOG_PROJECT_ID}"
+            
+            # First, search for the person by email in persons API
+            persons_response = await client.get(
+                f"{base_url}/persons/",
+                headers=headers,
+                params={
+                    "search": email
+                }
+            )
+            
+            person_id = None
+            if persons_response.status_code == 200:
+                persons_data = persons_response.json()
+                results = persons_data.get("results", [])
+                
+                # Find person with matching email
+                for person in results:
+                    person_props = person.get("properties", {})
+                    person_email = person_props.get("email", "")
+                    
+                    if email.lower() == person_email.lower():
+                        person_id = person.get("id")
+                        break
+            
+            # Fetch recent events from PostHog
+            events_response = await client.get(
+                f"{base_url}/events/",
+                headers=headers,
+                params={
+                    "limit": 100
+                }
+            )
+            
+            events_data = []
+            total_events = 0
+            last_seen = None
+            session_ids = set()
+            
+            if events_response.status_code == 200:
+                events_result = events_response.json()
+                all_events = events_result.get("results", [])
+                
+                # Filter events by email (check person.properties.email)
+                for event in all_events:
+                    person = event.get("person")
+                    if not person:
+                        continue
+                    
+                    person_props = person.get("properties", {})
+                    if not person_props:
+                        continue
+                    
+                    person_email = person_props.get("email", "")
+                    
+                    # Match by person.properties.email
+                    if email.lower() == person_email.lower():
+                        
+                        event_data = {
+                            "event": event.get("event"),
+                            "timestamp": event.get("timestamp"),
+                            "properties": event.get("properties", {})
+                        }
+                        events_data.append(event_data)
+                        
+                        # Track session IDs
+                        session_id = event.get("properties", {}).get("$session_id")
+                        if session_id:
+                            session_ids.add(session_id)
+                        
+                        # Get last seen timestamp
+                        if not last_seen and event.get("timestamp"):
+                            last_seen = event.get("timestamp")
+                
+                total_events = len(events_data)
+                events_data = events_data[:20]  # Limit to 20 most recent
+            
+            return {
+                "success": True,
+                "total_events": total_events,
+                "session_count": len(session_ids),
+                "last_seen": last_seen,
+                "recent_events": events_data,
+                "person_id": person_id
+            }
+            
+    except httpx.TimeoutException:
+        return {
+            "success": False,
+            "error": "PostHog API timeout",
+            "total_events": 0,
+            "session_count": 0,
+            "last_seen": None,
+            "recent_events": []
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "total_events": 0,
+            "session_count": 0,
+            "last_seen": None,
+            "recent_events": []
+        }
