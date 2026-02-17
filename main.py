@@ -1996,7 +1996,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str, session_id: str
                     active_requests.discard(request_id)
                     
             except asyncio.TimeoutError:
-                logger.info(f"WebSocket timeout for {connection_id}, checking if still alive")
+                # Timeout is normal - just send a ping to verify connection is alive
                 try:
                     await websocket.send_json({
                         "type": "ping",
