@@ -9373,6 +9373,99 @@ async def notify_agent_enablement(request: AgentEnablementNotification):
 # END AGENT ENABLEMENT NOTIFICATION
 # ============================================================================
 
+# ============================================================================
+# CONTENT REFRESH NOTIFICATION ENDPOINT
+# ============================================================================
+
+class ContentRefreshNotification(BaseModel):
+    user_id: str
+    agent_id: str
+    content_type: str = "social_posts"  # social_posts, newsletters, etc.
+    action: str = "refresh"  # refresh, created, updated, deleted
+
+@app.post("/api/content/notify-refresh")
+async def notify_content_refresh(request: ContentRefreshNotification):
+    """
+    Endpoint to trigger content refresh notification.
+    Broadcasts via Supabase Realtime to force frontend Generated Content refresh.
+    Can be called by n8n workflows or other services after content changes.
+    """
+    try:
+        user_id = request.user_id
+        agent_id = request.agent_id
+        content_type = request.content_type
+        action = request.action
+        
+        logger.info(f"🔄 Content refresh notification: user={user_id}, agent={agent_id}, type={content_type}, action={action}")
+        
+        # Broadcast refresh signal via Supabase Realtime
+        try:
+            import httpx
+            supabase_url = os.getenv('SUPABASE_URL') or os.getenv('VITE_SUPABASE_URL')
+            supabase_key = os.getenv('SUPABASE_SERVICE_ROLE_KEY') or os.getenv('SUPABASE_KEY') or os.getenv('VITE_SUPABASE_ANON_KEY')
+            
+            if supabase_url and supabase_key:
+                broadcast_url = f"{supabase_url}/realtime/v1/api/broadcast"
+                async with httpx.AsyncClient() as client:
+                    broadcast_response = await client.post(
+                        broadcast_url,
+                        headers={
+                            'apikey': supabase_key,
+                            'Authorization': f'Bearer {supabase_key}',
+                            'Content-Type': 'application/json'
+                        },
+                        json={
+                            'messages': [{
+                                'topic': f'content-refresh-{user_id}',
+                                'event': 'refresh_content',
+                                'payload': {
+                                    'user_id': user_id,
+                                    'agent_id': agent_id,
+                                    'content_type': content_type,
+                                    'action': action,
+                                    'timestamp': datetime.now(timezone.utc).isoformat()
+                                }
+                            }]
+                        },
+                        timeout=10.0
+                    )
+                    logger.info(f"📡 Content refresh broadcast sent: status={broadcast_response.status_code}")
+                    
+                return {
+                    "success": True,
+                    "message": f"Content refresh notification sent for {content_type}",
+                    "user_id": user_id,
+                    "agent_id": agent_id,
+                    "content_type": content_type,
+                    "notification_sent": True
+                }
+            else:
+                logger.warning("⚠️ Supabase credentials not found for broadcast")
+                return {
+                    "success": False,
+                    "message": "Supabase credentials not configured",
+                    "notification_sent": False
+                }
+        except Exception as broadcast_error:
+            logger.warning(f"⚠️ Content refresh broadcast failed: {broadcast_error}")
+            return {
+                "success": False,
+                "message": f"Broadcast failed: {str(broadcast_error)}",
+                "notification_sent": False
+            }
+            
+    except Exception as e:
+        logger.error(f"❌ Error in content refresh notification: {str(e)}")
+        return {
+            "success": False,
+            "message": f"Error: {str(e)}",
+            "notification_sent": False
+        }
+
+# ============================================================================
+# END CONTENT REFRESH NOTIFICATION
+# ============================================================================
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
