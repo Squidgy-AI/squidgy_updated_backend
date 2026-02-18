@@ -230,6 +230,72 @@ async def get_social_posts_by_user(
     return await get_social_posts(ScheduledPostsRequest(firm_user_id=firm_user_id, agent_id=agent_id))
 
 
+@router.get("/accounts/{firm_user_id}")
+async def get_social_accounts(
+    firm_user_id: str,
+    agent_id: str = Query(default="SOL", description="Agent ID")
+):
+    """Get connected social media accounts for a user"""
+    try:
+        credentials = await get_ghl_credentials(firm_user_id, agent_id)
+        
+        if not credentials:
+            raise HTTPException(status_code=404, detail="GHL account not found.")
+        
+        location_id = credentials.get('location_id')
+        pit_token = credentials.get('pit_token')
+        
+        if not location_id or not pit_token:
+            raise HTTPException(status_code=400, detail="Missing GHL credentials.")
+        
+        # Fetch accounts directly from GHL API
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"https://services.leadconnectorhq.com/social-media-posting/{location_id}/accounts",
+                headers={
+                    "Authorization": f"Bearer {pit_token}",
+                    "Version": "2021-07-28",
+                    "Accept": "application/json"
+                },
+                timeout=30.0
+            )
+            
+            accounts = []
+            if response.is_success:
+                data = response.json()
+                
+                # Handle nested response: results.accounts
+                raw_accounts = []
+                if 'results' in data and 'accounts' in data['results']:
+                    raw_accounts = data['results']['accounts']
+                elif 'accounts' in data:
+                    raw_accounts = data['accounts']
+                elif 'data' in data:
+                    raw_accounts = data['data']
+                
+                for acc in raw_accounts:
+                    acc_id = acc.get('id') or acc.get('_id')
+                    platform = acc.get('platform', '').lower()
+                    name = acc.get('name') or acc.get('pageName') or acc.get('username') or platform.capitalize()
+                    
+                    if acc_id:
+                        accounts.append({
+                            "id": acc_id,
+                            "platform": platform,
+                            "name": name
+                        })
+        
+        return {
+            "success": True,
+            "accounts": accounts
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 class DeletePostRequest(BaseModel):
     firm_user_id: str
     post_id: str
@@ -288,4 +354,121 @@ async def delete_social_post(
         raise
     except Exception as e:
         logger.error(f"[SOCIAL POSTS] Error deleting post: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class EditPostRequest(BaseModel):
+    firm_user_id: str
+    post_id: str
+    summary: Optional[str] = None
+    schedule_date: Optional[str] = None
+    media: Optional[List[dict]] = None
+    account_ids: Optional[List[str]] = None
+    post_type: Optional[str] = None
+    agent_id: Optional[str] = "SOL"
+
+
+@router.put("/posts/{post_id}")
+async def edit_social_post(
+    post_id: str,
+    request: EditPostRequest
+):
+    """
+    Edit a scheduled social media post in GHL
+    PUT https://services.leadconnectorhq.com/social-media-posting/{locationId}/posts/{postId}
+    GHL requires: accountIds, type, userId, media, summary, scheduleDate
+    """
+    try:
+        credentials = await get_ghl_credentials(request.firm_user_id, request.agent_id)
+        
+        if not credentials:
+            raise HTTPException(status_code=404, detail="GHL account not found. Please complete GHL setup.")
+        
+        location_id = credentials.get('location_id')
+        pit_token = credentials.get('pit_token')
+        
+        if not location_id or not pit_token:
+            raise HTTPException(status_code=400, detail="Missing GHL credentials. Please complete setup in Settings.")
+        
+        async with httpx.AsyncClient() as client:
+            # First, fetch the existing post to get required fields
+            get_response = await client.get(
+                f"https://services.leadconnectorhq.com/social-media-posting/{location_id}/posts/{post_id}",
+                headers={
+                    "Authorization": f"Bearer {pit_token}",
+                    "Version": "2021-07-28",
+                    "Accept": "application/json"
+                },
+                timeout=30.0
+            )
+            
+            if not get_response.is_success:
+                raise HTTPException(status_code=get_response.status_code, detail=f"Failed to fetch post: {get_response.text}")
+            
+            existing_post = get_response.json()
+            # Handle nested response structure: results.post or post or direct
+            post_data = existing_post
+            if 'results' in existing_post and 'post' in existing_post['results']:
+                post_data = existing_post['results']['post']
+            elif 'post' in existing_post:
+                post_data = existing_post['post']
+            
+            # Get accountIds from the post data itself or use provided ones
+            account_ids = request.account_ids if request.account_ids else post_data.get('accountIds', [])
+            if not account_ids:
+                single_account_id = post_data.get('accountId')
+                if single_account_id:
+                    account_ids = [single_account_id]
+            
+            if not account_ids:
+                raise HTTPException(status_code=400, detail="No accountIds found in post data")
+            
+            # Build the update payload with required fields from existing post
+            update_payload = {
+                'accountIds': account_ids,
+                'type': request.post_type or post_data.get('type', 'post'),
+                'userId': location_id,  # GHL uses locationId as userId
+                'media': request.media if request.media is not None else post_data.get('media', []),
+                'summary': request.summary if request.summary is not None else post_data.get('summary', ''),
+            }
+            
+            # Add schedule date if provided or exists
+            if request.schedule_date:
+                update_payload['scheduleDate'] = request.schedule_date
+            elif post_data.get('scheduleDate'):
+                update_payload['scheduleDate'] = post_data.get('scheduleDate')
+            
+            
+            # Call GHL API to edit the post
+            response = await client.put(
+                f"https://services.leadconnectorhq.com/social-media-posting/{location_id}/posts/{post_id}",
+                headers={
+                    "Authorization": f"Bearer {pit_token}",
+                    "Version": "2021-07-28",
+                    "Accept": "application/json",
+                    "Content-Type": "application/json"
+                },
+                json=update_payload,
+                timeout=30.0
+            )
+            
+            if not response.is_success:
+                if response.status_code == 401:
+                    raise HTTPException(status_code=401, detail="GHL authentication failed. Please reconnect your GHL account.")
+                if response.status_code == 404:
+                    raise HTTPException(status_code=404, detail="Post not found.")
+                raise HTTPException(status_code=response.status_code, detail=f"GHL API error: {response.text}")
+            
+            logger.info(f"[SOCIAL POSTS] Post {post_id} edited successfully for user {request.firm_user_id}")
+            
+            return {
+                "success": True,
+                "message": "Post updated successfully",
+                "post_id": post_id
+            }
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[SOCIAL POSTS] Error editing post: {e}")
         raise HTTPException(status_code=500, detail=str(e))
