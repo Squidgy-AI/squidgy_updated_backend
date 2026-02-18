@@ -9150,6 +9150,18 @@ except Exception as e:
     logger.error(f"Error loading Social Media Slack routes: {e}")
 
 # ============================================================================
+# SOCIAL MEDIA ROUTES - SCHEDULED POSTS
+# ============================================================================
+try:
+    from GHL_Marketing.social_scheduled_posts import router as social_scheduled_posts_router
+    app.include_router(social_scheduled_posts_router)
+    logger.info("Social Media Scheduled Posts routes loaded successfully")
+except ImportError as e:
+    logger.warning(f"Social Media Scheduled Posts routes not available: {e}")
+except Exception as e:
+    logger.error(f"Error loading Social Media Scheduled Posts routes: {e}")
+
+# ============================================================================
 # MCP (Model Context Protocol) INTEGRATION
 # ============================================================================
 
