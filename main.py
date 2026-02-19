@@ -66,7 +66,7 @@ class ConversationalHandler:
             'timestamp': datetime.now()
         }
 
-    async def save_to_history(self, session_id: str, user_id: str, user_message: str, agent_response: str, execution_id: str = None):
+    async def save_to_history(self, session_id: str, user_id: str, user_message: str, agent_response: str, execution_id: str = None, workflow_id: str = None):
         """Save message to chat history - saves user and agent messages separately with duplicate prevention"""
         try:
             # Check for existing user message to prevent duplicates (within last 10 seconds)
@@ -128,7 +128,8 @@ class ConversationalHandler:
                         'sender': 'Agent',
                         'message': agent_response,
                         'timestamp': datetime.now().isoformat(),
-                        'execution_id': execution_id
+                        'execution_id': execution_id,
+                        'workflow_id': workflow_id
                     }
                     
                     try:
@@ -373,6 +374,7 @@ class ConversationalHandler:
                 'missing_info': parsed_data.get('missing_info', []),
                 'output_action': parsed_data.get('output_action'),  # Add output_action to response
                 'execution_id': parsed_data.get('execution_id'),  # Add execution_id from n8n
+                'workflow_id': parsed_data.get('workflow_id'),  # Add workflow_id from n8n
                 'timestamp': datetime.now().isoformat()
             }
             
@@ -873,7 +875,8 @@ async def process_websocket_message_with_n8n(request_data: Dict[str, Any], webso
             request_data["user_id"], 
             request_data["user_mssg"],
             n8n_response.get("agent_response", ""),
-            n8n_response.get("execution_id")
+            n8n_response.get("execution_id"),
+            n8n_response.get("workflow_id")
         )
         
         logger.info(f"✅ WebSocket message processed successfully: {request_id}")
@@ -1301,7 +1304,8 @@ async def n8n_main_request(request: N8nMainRequest, agent_name: str, session_id:
                 request.user_id,
                 request_data.get("_original_message", request.user_mssg),
                 formatted_response["agent_response"],
-                n8n_response.get("execution_id")
+                n8n_response.get("execution_id"),
+                n8n_response.get("workflow_id")
             )
             
             return formatted_response
