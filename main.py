@@ -66,7 +66,7 @@ class ConversationalHandler:
             'timestamp': datetime.now()
         }
 
-    async def save_to_history(self, session_id: str, user_id: str, user_message: str, agent_response: str):
+    async def save_to_history(self, session_id: str, user_id: str, user_message: str, agent_response: str, execution_id: str = None):
         """Save message to chat history - saves user and agent messages separately with duplicate prevention"""
         try:
             # Check for existing user message to prevent duplicates (within last 10 seconds)
@@ -127,7 +127,8 @@ class ConversationalHandler:
                         'user_id': user_id,
                         'sender': 'Agent',
                         'message': agent_response,
-                        'timestamp': datetime.now().isoformat()
+                        'timestamp': datetime.now().isoformat(),
+                        'execution_id': execution_id
                     }
                     
                     try:
@@ -371,6 +372,7 @@ class ConversationalHandler:
                 'conversation_state': parsed_data.get('conversation_state', 'complete'),
                 'missing_info': parsed_data.get('missing_info', []),
                 'output_action': parsed_data.get('output_action'),  # Add output_action to response
+                'execution_id': parsed_data.get('execution_id'),  # Add execution_id from n8n
                 'timestamp': datetime.now().isoformat()
             }
             
@@ -870,7 +872,8 @@ async def process_websocket_message_with_n8n(request_data: Dict[str, Any], webso
             request_data["session_id"],
             request_data["user_id"], 
             request_data["user_mssg"],
-            n8n_response.get("agent_response", "")
+            n8n_response.get("agent_response", ""),
+            n8n_response.get("execution_id")
         )
         
         logger.info(f"✅ WebSocket message processed successfully: {request_id}")
@@ -1270,10 +1273,7 @@ async def n8n_main_request(request: N8nMainRequest, agent_name: str, session_id:
                 logger.info(f"Returning cached response for request_id: {request_id}")
                 return cached_response
                 
-            n8n_payload = await conversational_handler.handle_message(request_data)
-            logger.info(f"Sending to n8n: {n8n_payload}")
-            
-            n8n_response = await call_n8n_webhook(n8n_payload)
+            n8n_response = await conversational_handler.handle_message(request_data)
             
             # Enhanced logging for debugging
             logger.debug(f"N8N Main Request - ID: {request_id}, Session: {session_id}, Agent: {agent_name}, Message: {request.user_mssg}, Response: {json.dumps(n8n_response, indent=2)}")
@@ -1300,7 +1300,8 @@ async def n8n_main_request(request: N8nMainRequest, agent_name: str, session_id:
                 request.session_id,
                 request.user_id,
                 request_data.get("_original_message", request.user_mssg),
-                formatted_response["agent_response"]
+                formatted_response["agent_response"],
+                n8n_response.get("execution_id")
             )
             
             return formatted_response
