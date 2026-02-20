@@ -11,6 +11,7 @@ from pydantic import BaseModel
 import asyncpg
 from datetime import datetime
 from supabase import create_client, Client
+from supabase.lib.client_options import SyncClientOptions
 import uuid as uuid_lib
 import httpx
 
@@ -28,12 +29,13 @@ NEON_DB_NAME = os.getenv('NEON_DB_NAME', 'neondb')
 # Supabase configuration
 SUPABASE_URL = os.getenv('SUPABASE_URL')
 SUPABASE_SERVICE_KEY = os.getenv('SUPABASE_SERVICE_KEY')
+SUPABASE_SCHEMA = os.getenv('SUPABASE_SCHEMA', 'public')
 
 def get_supabase_client() -> Client:
     """Create and return a Supabase client"""
     if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
         raise HTTPException(status_code=500, detail="Supabase configuration missing")
-    return create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+    return create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY, options=SyncClientOptions(schema=SUPABASE_SCHEMA))
 
 # ============================================================================
 # Pydantic Models

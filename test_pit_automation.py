@@ -45,12 +45,14 @@ async def test_pit_automation():
     # Import Supabase client
     try:
         from supabase import create_client, Client
-        
+        from supabase.lib.client_options import SyncClientOptions
+
         # Use credentials directly for testing
         supabase_url = "https://aoteeitreschwzkbpqyd.supabase.co"
         supabase_key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFvdGVlaXRyZXNjaHd6a2JwcXlkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDQxMjAwMzQsImV4cCI6MjA1OTY5NjAzNH0.S7P9-G4CaSE6DWycNq0grv-x6UCIsfLvXooCtMwaKHM"
-        
-        supabase: Client = create_client(supabase_url, supabase_key)
+        supabase_schema = os.getenv('SUPABASE_SCHEMA', 'public')
+
+        supabase: Client = create_client(supabase_url, supabase_key, options=SyncClientOptions(schema=supabase_schema))
         print("✅ Connected to Supabase")
         
         # Check current pit_token status

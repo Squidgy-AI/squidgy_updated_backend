@@ -1,12 +1,14 @@
 import os
 from supabase import create_client
+from supabase.lib.client_options import SyncClientOptions
 from dotenv import load_dotenv
 
 load_dotenv()
 
 SUPABASE_URL = os.getenv('SUPABASE_URL')
 SUPABASE_KEY = os.getenv('SUPABASE_SERVICE_KEY')
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+SUPABASE_SCHEMA = os.getenv('SUPABASE_SCHEMA', 'public')
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY, options=SyncClientOptions(schema=SUPABASE_SCHEMA))
 
 firm_user_id = "fdd48dd5-dabe-426d-a861-416d0a6adc0f"
 

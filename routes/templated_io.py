@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException, Body
 from pydantic import BaseModel
 import httpx
 from supabase import create_client, Client
+from supabase.lib.client_options import SyncClientOptions
 
 logger = logging.getLogger(__name__)
 
@@ -22,12 +23,13 @@ TEMPLATED_API_URL = "https://api.templated.io/v1"
 # Supabase configuration
 SUPABASE_URL = os.getenv('SUPABASE_URL')
 SUPABASE_SERVICE_KEY = os.getenv('SUPABASE_SERVICE_KEY')
+SUPABASE_SCHEMA = os.getenv('SUPABASE_SCHEMA', 'public')
 
 def get_supabase_client() -> Client:
     """Create and return a Supabase client"""
     if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
         raise HTTPException(status_code=500, detail="Supabase configuration missing")
-    return create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+    return create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY, options=SyncClientOptions(schema=SUPABASE_SCHEMA))
 
 # ============================================================================
 # Pydantic Models

@@ -3,6 +3,7 @@ import os
 import asyncio
 import aiohttp
 from supabase import create_client, Client
+from supabase.lib.client_options import SyncClientOptions
 from dotenv import load_dotenv
 from playwright.async_api import async_playwright
 import time
@@ -19,7 +20,8 @@ load_dotenv()
 # Initialize Supabase client
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+SUPABASE_SCHEMA = os.getenv("SUPABASE_SCHEMA", "public")
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY, options=SyncClientOptions(schema=SUPABASE_SCHEMA))
 
 # Create a thread pool for blocking operations
 executor = ThreadPoolExecutor(max_workers=3)

@@ -20,6 +20,7 @@ from playwright.async_api import async_playwright
 # Import Supabase client
 try:
     from supabase import create_client, Client
+    from supabase.lib.client_options import SyncClientOptions
     SUPABASE_AVAILABLE = True
 except ImportError:
     print("[WARNING] Supabase module not available. Will only capture tokens.")
@@ -663,11 +664,12 @@ class HighLevelRetryAutomation:
             # Initialize Supabase client
             supabase_url = os.getenv('SUPABASE_URL')
             supabase_key = os.getenv('SUPABASE_SERVICE_KEY')
+            supabase_schema = os.getenv('SUPABASE_SCHEMA', 'public')
             if not supabase_url or not supabase_key:
                 print("[❌ DATABASE] SUPABASE_URL or SUPABASE_SERVICE_KEY not found in environment variables")
                 return False
-                
-            supabase: Client = create_client(supabase_url, supabase_key)
+
+            supabase: Client = create_client(supabase_url, supabase_key, options=SyncClientOptions(schema=supabase_schema))
             
             # Decode access token to get expiry
             access_token_info = None
