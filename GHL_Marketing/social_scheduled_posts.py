@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 import httpx
 from supabase import create_client, Client
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -202,6 +203,27 @@ async def get_social_posts(request: ScheduledPostsRequest):
                 resolved_platform = resolve_platform_from_account(post, account_platform_map)
                 post['platform'] = resolved_platform
             
+            # Check draft status for each post from post_confirmation_checker
+            post_ids = [p.get('_id') or p.get('id') for p in posts if p.get('_id') or p.get('id')]
+            if post_ids:
+                try:
+                    draft_check = supabase.table('post_confirmation_checker')\
+                        .select('post_id, status')\
+                        .eq('user_id', request.firm_user_id)\
+                        .in_('post_id', post_ids)\
+                        .execute()
+                    
+                    draft_map = {item['post_id']: item['status'] == 'drafted' for item in draft_check.data} if draft_check.data else {}
+                    
+                    for post in posts:
+                        post_id = post.get('_id') or post.get('id')
+                        # Check if post is in draft table OR has 2099 schedule date (fallback for old posts)
+                        schedule_date = post.get('scheduleDate', '')
+                        if (post_id and draft_map.get(post_id)) or (schedule_date and schedule_date.startswith('2099')):
+                            post['isDrafted'] = True
+                except Exception as e:
+                    logger.warning(f"[SOCIAL POSTS] Failed to check draft status: {e}")
+            
             # Separate by status
             scheduled = [p for p in posts if p.get('status', '').lower() in ['scheduled', 'pending', 'draft', 'queued']]
             published = [p for p in posts if p.get('status', '').lower() == 'published']
@@ -302,6 +324,32 @@ class DeletePostRequest(BaseModel):
     agent_id: Optional[str] = "SOL"
 
 
+@router.get("/posts/check-draft/{post_id}")
+async def check_post_draft_status(
+    post_id: str,
+    firm_user_id: str = Query(..., description="User ID")
+):
+    """
+    Check if a post is drafted by checking post_confirmation_checker table
+    """
+    try:
+        result = supabase.table('post_confirmation_checker')\
+            .select('status')\
+            .eq('post_id', post_id)\
+            .eq('user_id', firm_user_id)\
+            .execute()
+        
+        if not result.data:
+            return {"is_drafted": False}
+        
+        status = result.data[0].get('status', '')
+        return {"is_drafted": status == 'drafted'}
+        
+    except Exception as e:
+        logger.error(f"[SOCIAL POSTS] Error checking draft status: {e}")
+        return {"is_drafted": False}
+
+
 @router.delete("/posts/{post_id}")
 async def delete_social_post(
     post_id: str,
@@ -343,6 +391,19 @@ async def delete_social_post(
                 raise HTTPException(status_code=response.status_code, detail=f"GHL API error: {response.text}")
             
             logger.info(f"[SOCIAL POSTS] Post {post_id} deleted successfully for user {firm_user_id}")
+            
+            # Update post_confirmation_checker table
+            try:
+                # Delete the corresponding record
+                supabase.table('post_confirmation_checker')\
+                    .delete()\
+                    .eq('post_id', post_id)\
+                    .execute()
+                    
+                logger.info(f"[SOCIAL POSTS] Deleted post_confirmation_checker record for post {post_id}")
+                
+            except Exception as e:
+                logger.warning(f"[SOCIAL POSTS] Failed to delete post_confirmation_checker record: {e}")
             
             return {
                 "success": True,
@@ -417,6 +478,14 @@ async def edit_social_post(
             
             logger.info(f"[SOCIAL POSTS] Existing post data: {post_data}")
             
+            # Check if post is already published - cannot edit published posts
+            post_status = post_data.get('status', '').lower()
+            if post_status == 'published':
+                raise HTTPException(
+                    status_code=400, 
+                    detail="Cannot edit a published post. This post has already been published to social media."
+                )
+            
             # Get accountIds
             account_ids = request.account_ids if request.account_ids else post_data.get('accountIds', [])
             if not account_ids:
@@ -444,21 +513,26 @@ async def edit_social_post(
             
             # Step 3: Recreate with edits applied (fall back to original values)
             create_payload = {
-                'accountIds': account_ids,
-                'type': request.post_type or post_data.get('type', 'post'),
                 'userId': location_id,
+                'type': request.post_type or post_data.get('type', 'post'),
+                'status': 'scheduled',
+                'scheduleDate': request.schedule_date or post_data.get('scheduleDate'),
+                'accountIds': account_ids,
                 'media': request.media if request.media is not None else post_data.get('media', []),
                 'summary': request.summary if request.summary is not None else post_data.get('summary', ''),
-                'scheduleDate': request.schedule_date or post_data.get('displayDate') or post_data.get('scheduleDate'),
             }
             
-            # Preserve platform-specific details
+            # Preserve platform-specific details (but exclude problematic fields)
             for detail_key in ['facebookPostDetails', 'instagramPostDetails',
                                'linkedinPostDetails', 'twitterPostDetails',
                                'tiktokPostDetails', 'youtubePostDetails',
                                'googlePostDetails', 'pinterestPostDetails']:
                 if post_data.get(detail_key):
-                    create_payload[detail_key] = post_data[detail_key]
+                    details = post_data[detail_key].copy() if isinstance(post_data[detail_key], dict) else post_data[detail_key]
+                    # Remove shortenedLinks as it can cause issues
+                    if isinstance(details, dict) and 'shortenedLinks' in details:
+                        del details['shortenedLinks']
+                    create_payload[detail_key] = details
             
             # Preserve tags/categories
             if post_data.get('tags'):
@@ -488,13 +562,82 @@ async def edit_social_post(
                 )
             
             create_result = create_response.json()
+            
+            # Extract the new post ID from the CREATE response
             new_post_data = create_result
+            new_post_id = 'unknown'
+            
+            # Check if the response has the expected nested structure
             if 'results' in create_result and 'post' in create_result['results']:
                 new_post_data = create_result['results']['post']
+                new_post_id = new_post_data.get('_id', 'unknown')
+            elif 'post' in create_result:
+                new_post_data = create_result['post']
+                new_post_id = new_post_data.get('_id', 'unknown')
+            else:
+                # CREATE response doesn't include post data, fetch the latest post
+                logger.warning(f"[SOCIAL POSTS] CREATE response missing post ID, fetching latest post")
+                
+                import asyncio
+                await asyncio.sleep(1.5)  # Wait for GHL to process
+                
+                # Fetch the most recent post
+                fetch_response = await client.post(
+                    f"https://services.leadconnectorhq.com/social-media-posting/{location_id}/posts/list",
+                    headers=headers,
+                    json={"skip": "0", "limit": "1"},
+                    timeout=30.0
+                )
+                
+                if fetch_response.is_success:
+                    fetch_result = fetch_response.json()
+                    
+                    # Try different response structures
+                    posts = fetch_result.get('posts', [])
+                    if not posts and 'results' in fetch_result:
+                        posts = fetch_result['results'] if isinstance(fetch_result['results'], list) else fetch_result['results'].get('posts', [])
+                    
+                    if posts:
+                        latest_post = posts[0]
+                        new_post_id = latest_post.get('_id', 'unknown')
+                        new_post_data = latest_post
+                    else:
+                        logger.error(f"[SOCIAL POSTS] No posts found in fetch response")
+                else:
+                    logger.error(f"[SOCIAL POSTS] Failed to fetch posts: {fetch_response.status_code}")
             
-            new_post_id = new_post_data.get('_id', 'unknown')
             
-            logger.info(f"[SOCIAL POSTS] Post edited via delete+recreate. Old: {post_id}, New: {new_post_id}")
+            # Update post_confirmation_checker table
+            try:
+                # Delete the old record using the old post_id
+                delete_result = supabase.table('post_confirmation_checker')\
+                    .delete()\
+                    .eq('post_id', post_id)\
+                    .execute()
+                
+                
+                # Only insert if we successfully got the new post ID
+                if new_post_id != 'unknown':
+                    # Create new record with the NEW post_id from recreation
+                    checker_payload = {
+                        'user_id': request.firm_user_id,
+                        'payload': create_payload,
+                        'scheduled_for': request.schedule_date or post_data.get('displayDate') or post_data.get('scheduleDate'),
+                        'ghl_location_id': location_id,
+                        'platform': resolve_platform_from_account(post_data, {}),
+                        'post_id': new_post_id,  # Use the NEW post ID
+                        'status': 'scheduled'
+                    }
+                    
+                    # Insert the new record - should work now since old one is deleted
+                    insert_result = supabase.table('post_confirmation_checker')\
+                        .insert(checker_payload)\
+                        .execute()
+                else:
+                    logger.warning(f"[SOCIAL POSTS] Skipping post_confirmation_checker insert - could not determine new post ID")
+                
+            except Exception as e:
+                logger.error(f"[SOCIAL POSTS] Failed to update post_confirmation_checker: {e}")
             
             return {
                 "success": True,
@@ -572,6 +715,14 @@ async def postpone_social_post(
             logger.info(f"[SOCIAL POSTS] Existing post data keys: {list(post_data.keys())}")
             logger.info(f"[SOCIAL POSTS] Existing post full data: {post_data}")
             
+            # Check if post is already published - cannot postpone published posts
+            post_status = post_data.get('status', '').lower()
+            if post_status == 'published':
+                raise HTTPException(
+                    status_code=400, 
+                    detail="Cannot postpone a published post. This post has already been published to social media."
+                )
+            
             # Get accountIds
             account_ids = post_data.get('accountIds', [])
             if not account_ids:
@@ -599,12 +750,13 @@ async def postpone_social_post(
             
             # Step 3: Recreate the post with the postponed schedule date
             create_payload = {
-                'accountIds': account_ids,
-                'summary': post_data.get('summary', ''),
+                'userId': location_id,
+                'type': post_data.get('type', 'post'),
+                'status': 'scheduled',
                 'scheduleDate': request.schedule_date,
+                'accountIds': account_ids,
                 'media': post_data.get('media', []),
-                'type': post_data.get('type', 'post'),  # Required: post, story, or reel
-                'userId': location_id,  # Required
+                'summary': post_data.get('summary', ''),
             }
             
             # Include platform-specific details if they exist
@@ -644,18 +796,81 @@ async def postpone_social_post(
             
             create_result = create_response.json()
             
-            # Extract new post ID
+            # Extract the new post ID from the CREATE response
             new_post_data = create_result
+            new_post_id = 'unknown'
+            
+            # Check if the response has the expected nested structure
             if 'results' in create_result and 'post' in create_result['results']:
                 new_post_data = create_result['results']['post']
+                new_post_id = new_post_data.get('_id', 'unknown')
+            elif 'post' in create_result:
+                new_post_data = create_result['post']
+                new_post_id = new_post_data.get('_id', 'unknown')
+            else:
+                # CREATE response doesn't include post data, fetch the latest post
+                logger.warning(f"[SOCIAL POSTS] CREATE response missing post ID, fetching latest post")
+                
+                import asyncio
+                await asyncio.sleep(1.5)  # Wait for GHL to process
+                
+                # Fetch the most recent post
+                fetch_response = await client.post(
+                    f"https://services.leadconnectorhq.com/social-media-posting/{location_id}/posts/list",
+                    headers=headers,
+                    json={"skip": "0", "limit": "1"},
+                    timeout=30.0
+                )
+                
+                if fetch_response.is_success:
+                    fetch_result = fetch_response.json()
+                    
+                    # Try different response structures
+                    posts = fetch_result.get('posts', [])
+                    if not posts and 'results' in fetch_result:
+                        posts = fetch_result['results'] if isinstance(fetch_result['results'], list) else fetch_result['results'].get('posts', [])
+                    
+                    if posts:
+                        latest_post = posts[0]
+                        new_post_id = latest_post.get('_id', 'unknown')
+                        new_post_data = latest_post
+                    else:
+                        logger.error(f"[SOCIAL POSTS] No posts found in fetch response")
+                else:
+                    logger.error(f"[SOCIAL POSTS] Failed to fetch posts: {fetch_response.status_code}")
             
-            new_post_id = new_post_data.get('_id', 'unknown')
             
-            logger.info(
-                f"[SOCIAL POSTS] Post postponed via delete+recreate. "
-                f"Old ID: {post_id}, New ID: {new_post_id}, "
-                f"Schedule: {request.schedule_date}"
-            )
+            # Update post_confirmation_checker table
+            try:
+                # Delete the old record using the old post_id
+                delete_result = supabase.table('post_confirmation_checker')\
+                    .delete()\
+                    .eq('post_id', post_id)\
+                    .execute()
+                
+                
+                # Only insert if we successfully got the new post ID
+                if new_post_id != 'unknown':
+                    # Create new record with the NEW post_id from recreation
+                    checker_payload = {
+                        'user_id': request.firm_user_id,
+                        'payload': create_payload,
+                        'scheduled_for': request.schedule_date,
+                        'ghl_location_id': location_id,
+                        'platform': resolve_platform_from_account(post_data, {}),
+                        'post_id': new_post_id,  # Use the NEW post ID
+                        'status': 'drafted'
+                    }
+                    
+                    # Insert the new record - should work now since old one is deleted
+                    insert_result = supabase.table('post_confirmation_checker')\
+                        .insert(checker_payload)\
+                        .execute()
+                else:
+                    logger.warning(f"[SOCIAL POSTS] Skipping post_confirmation_checker insert - could not determine new post ID")
+                
+            except Exception as e:
+                logger.error(f"[SOCIAL POSTS] Failed to update post_confirmation_checker: {e}")
             
             return {
                 "success": True,
