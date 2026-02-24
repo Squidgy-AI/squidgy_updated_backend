@@ -374,9 +374,9 @@ async def edit_social_post(
     request: EditPostRequest
 ):
     """
-    Edit a scheduled social media post in GHL
-    PUT https://services.leadconnectorhq.com/social-media-posting/{locationId}/posts/{postId}
-    GHL requires: accountIds, type, userId, media, summary, scheduleDate
+    Edit a scheduled social media post by deleting and recreating it.
+    GHL's PUT endpoint publishes immediately, so delete + recreate is required
+    to preserve scheduling.
     """
     try:
         credentials = await get_ghl_credentials(request.firm_user_id, request.agent_id)
@@ -390,15 +390,18 @@ async def edit_social_post(
         if not location_id or not pit_token:
             raise HTTPException(status_code=400, detail="Missing GHL credentials. Please complete setup in Settings.")
         
+        headers = {
+            "Authorization": f"Bearer {pit_token}",
+            "Version": "2021-07-28",
+            "Accept": "application/json",
+            "Content-Type": "application/json"
+        }
+        
         async with httpx.AsyncClient() as client:
-            # First, fetch the existing post to get required fields
+            # Step 1: Fetch the existing post
             get_response = await client.get(
                 f"https://services.leadconnectorhq.com/social-media-posting/{location_id}/posts/{post_id}",
-                headers={
-                    "Authorization": f"Bearer {pit_token}",
-                    "Version": "2021-07-28",
-                    "Accept": "application/json"
-                },
+                headers=headers,
                 timeout=30.0
             )
             
@@ -406,14 +409,15 @@ async def edit_social_post(
                 raise HTTPException(status_code=get_response.status_code, detail=f"Failed to fetch post: {get_response.text}")
             
             existing_post = get_response.json()
-            # Handle nested response structure: results.post or post or direct
             post_data = existing_post
             if 'results' in existing_post and 'post' in existing_post['results']:
                 post_data = existing_post['results']['post']
             elif 'post' in existing_post:
                 post_data = existing_post['post']
             
-            # Get accountIds from the post data itself or use provided ones
+            logger.info(f"[SOCIAL POSTS] Existing post data: {post_data}")
+            
+            # Get accountIds
             account_ids = request.account_ids if request.account_ids else post_data.get('accountIds', [])
             if not account_ids:
                 single_account_id = post_data.get('accountId')
@@ -423,52 +427,247 @@ async def edit_social_post(
             if not account_ids:
                 raise HTTPException(status_code=400, detail="No accountIds found in post data")
             
-            # Build the update payload with required fields from existing post
-            update_payload = {
-                'accountIds': account_ids,
-                'type': request.post_type or post_data.get('type', 'post'),
-                'userId': location_id,  # GHL uses locationId as userId
-                'media': request.media if request.media is not None else post_data.get('media', []),
-                'summary': request.summary if request.summary is not None else post_data.get('summary', ''),
-            }
-            
-            # Add schedule date if provided or exists
-            if request.schedule_date:
-                update_payload['scheduleDate'] = request.schedule_date
-            elif post_data.get('scheduleDate'):
-                update_payload['scheduleDate'] = post_data.get('scheduleDate')
-            
-            
-            # Call GHL API to edit the post
-            response = await client.put(
+            # Step 2: Delete the existing post
+            delete_response = await client.delete(
                 f"https://services.leadconnectorhq.com/social-media-posting/{location_id}/posts/{post_id}",
-                headers={
-                    "Authorization": f"Bearer {pit_token}",
-                    "Version": "2021-07-28",
-                    "Accept": "application/json",
-                    "Content-Type": "application/json"
-                },
-                json=update_payload,
+                headers=headers,
                 timeout=30.0
             )
             
-            if not response.is_success:
-                if response.status_code == 401:
-                    raise HTTPException(status_code=401, detail="GHL authentication failed. Please reconnect your GHL account.")
-                if response.status_code == 404:
-                    raise HTTPException(status_code=404, detail="Post not found.")
-                raise HTTPException(status_code=response.status_code, detail=f"GHL API error: {response.text}")
+            logger.info(f"[SOCIAL POSTS] DELETE response: {delete_response.status_code} - {delete_response.text}")
             
-            logger.info(f"[SOCIAL POSTS] Post {post_id} edited successfully for user {request.firm_user_id}")
+            if not delete_response.is_success:
+                raise HTTPException(
+                    status_code=delete_response.status_code,
+                    detail=f"Failed to delete post: {delete_response.text}"
+                )
+            
+            # Step 3: Recreate with edits applied (fall back to original values)
+            create_payload = {
+                'accountIds': account_ids,
+                'type': request.post_type or post_data.get('type', 'post'),
+                'userId': location_id,
+                'media': request.media if request.media is not None else post_data.get('media', []),
+                'summary': request.summary if request.summary is not None else post_data.get('summary', ''),
+                'scheduleDate': request.schedule_date or post_data.get('displayDate') or post_data.get('scheduleDate'),
+            }
+            
+            # Preserve platform-specific details
+            for detail_key in ['facebookPostDetails', 'instagramPostDetails',
+                               'linkedinPostDetails', 'twitterPostDetails',
+                               'tiktokPostDetails', 'youtubePostDetails',
+                               'googlePostDetails', 'pinterestPostDetails']:
+                if post_data.get(detail_key):
+                    create_payload[detail_key] = post_data[detail_key]
+            
+            # Preserve tags/categories
+            if post_data.get('tags'):
+                create_payload['tags'] = post_data['tags']
+            if post_data.get('categoryId'):
+                create_payload['categoryId'] = post_data['categoryId']
+            
+            logger.info(f"[SOCIAL POSTS] CREATE payload: {create_payload}")
+            
+            create_response = await client.post(
+                f"https://services.leadconnectorhq.com/social-media-posting/{location_id}/posts",
+                headers=headers,
+                json=create_payload,
+                timeout=30.0
+            )
+            
+            logger.info(f"[SOCIAL POSTS] CREATE response: {create_response.status_code} - {create_response.text}")
+            
+            if not create_response.is_success:
+                logger.error(
+                    f"[SOCIAL POSTS] Failed to recreate post after deletion! "
+                    f"Original post data preserved in logs. Status: {create_response.status_code}"
+                )
+                raise HTTPException(
+                    status_code=create_response.status_code,
+                    detail=f"Post was deleted but failed to recreate: {create_response.text}"
+                )
+            
+            create_result = create_response.json()
+            new_post_data = create_result
+            if 'results' in create_result and 'post' in create_result['results']:
+                new_post_data = create_result['results']['post']
+            
+            new_post_id = new_post_data.get('_id', 'unknown')
+            
+            logger.info(f"[SOCIAL POSTS] Post edited via delete+recreate. Old: {post_id}, New: {new_post_id}")
             
             return {
                 "success": True,
                 "message": "Post updated successfully",
-                "post_id": post_id
+                "old_post_id": post_id,
+                "new_post_id": new_post_id,
+                "ghl_response": create_result
             }
             
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"[SOCIAL POSTS] Error editing post: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+class PostponePostRequest(BaseModel):
+    firm_user_id: str
+    post_id: str
+    schedule_date: Optional[str] = "2099-12-31T23:59:59.999Z"
+    agent_id: Optional[str] = "SOL"
+
+
+@router.put("/posts/{post_id}/postpone")
+async def postpone_social_post(
+    post_id: str,
+    request: PostponePostRequest
+):
+    """
+    Postpone a scheduled social media post by deleting it and recreating 
+    with a far future schedule date. The edit API appears to publish 
+    immediately, so delete + recreate is the safer approach.
+    """
+    try:
+        credentials = await get_ghl_credentials(request.firm_user_id, request.agent_id)
+        
+        if not credentials:
+            raise HTTPException(status_code=404, detail="GHL account not found. Please complete GHL setup.")
+        
+        location_id = credentials.get('location_id')
+        pit_token = credentials.get('pit_token')
+        
+        if not location_id or not pit_token:
+            raise HTTPException(status_code=400, detail="Missing GHL credentials. Please complete setup in Settings.")
+        
+        headers = {
+            "Authorization": f"Bearer {pit_token}",
+            "Version": "2021-07-28",
+            "Accept": "application/json",
+            "Content-Type": "application/json"
+        }
+        
+        async with httpx.AsyncClient() as client:
+            # Step 1: Fetch the existing post
+            get_response = await client.get(
+                f"https://services.leadconnectorhq.com/social-media-posting/{location_id}/posts/{post_id}",
+                headers=headers,
+                timeout=30.0
+            )
+            
+            if not get_response.is_success:
+                raise HTTPException(
+                    status_code=get_response.status_code, 
+                    detail=f"Failed to fetch post: {get_response.text}"
+                )
+            
+            existing_post = get_response.json()
+            
+            # Parse nested response
+            post_data = existing_post
+            if 'results' in existing_post and 'post' in existing_post['results']:
+                post_data = existing_post['results']['post']
+            elif 'post' in existing_post:
+                post_data = existing_post['post']
+            
+            logger.info(f"[SOCIAL POSTS] Existing post data keys: {list(post_data.keys())}")
+            logger.info(f"[SOCIAL POSTS] Existing post full data: {post_data}")
+            
+            # Get accountIds
+            account_ids = post_data.get('accountIds', [])
+            if not account_ids:
+                single_account_id = post_data.get('accountId')
+                if single_account_id:
+                    account_ids = [single_account_id]
+            
+            if not account_ids:
+                raise HTTPException(status_code=400, detail="No accountIds found in post data")
+            
+            # Step 2: Delete the existing post
+            delete_response = await client.delete(
+                f"https://services.leadconnectorhq.com/social-media-posting/{location_id}/posts/{post_id}",
+                headers=headers,
+                timeout=30.0
+            )
+            
+            logger.info(f"[SOCIAL POSTS] DELETE response: {delete_response.status_code} - {delete_response.text}")
+            
+            if not delete_response.is_success:
+                raise HTTPException(
+                    status_code=delete_response.status_code, 
+                    detail=f"Failed to delete post: {delete_response.text}"
+                )
+            
+            # Step 3: Recreate the post with the postponed schedule date
+            create_payload = {
+                'accountIds': account_ids,
+                'summary': post_data.get('summary', ''),
+                'scheduleDate': request.schedule_date,
+                'media': post_data.get('media', []),
+                'type': post_data.get('type', 'post'),  # Required: post, story, or reel
+                'userId': location_id,  # Required
+            }
+            
+            # Include platform-specific details if they exist
+            for detail_key in ['facebookPostDetails', 'instagramPostDetails', 
+                               'linkedinPostDetails', 'twitterPostDetails',
+                               'tiktokPostDetails', 'youtubePostDetails',
+                               'googlePostDetails', 'pinterestPostDetails']:
+                if post_data.get(detail_key):
+                    create_payload[detail_key] = post_data[detail_key]
+            
+            # Include tags/categories if present
+            if post_data.get('tags'):
+                create_payload['tags'] = post_data['tags']
+            if post_data.get('categoryId'):
+                create_payload['categoryId'] = post_data['categoryId']
+            
+            logger.info(f"[SOCIAL POSTS] CREATE payload: {create_payload}")
+            
+            create_response = await client.post(
+                f"https://services.leadconnectorhq.com/social-media-posting/{location_id}/posts",
+                headers=headers,
+                json=create_payload,
+                timeout=30.0
+            )
+            
+            logger.info(f"[SOCIAL POSTS] CREATE response: {create_response.status_code} - {create_response.text}")
+            
+            if not create_response.is_success:
+                logger.error(
+                    f"[SOCIAL POSTS] Failed to recreate post after deletion! "
+                    f"Original post data preserved in logs. Status: {create_response.status_code}"
+                )
+                raise HTTPException(
+                    status_code=create_response.status_code, 
+                    detail=f"Post was deleted but failed to recreate: {create_response.text}"
+                )
+            
+            create_result = create_response.json()
+            
+            # Extract new post ID
+            new_post_data = create_result
+            if 'results' in create_result and 'post' in create_result['results']:
+                new_post_data = create_result['results']['post']
+            
+            new_post_id = new_post_data.get('_id', 'unknown')
+            
+            logger.info(
+                f"[SOCIAL POSTS] Post postponed via delete+recreate. "
+                f"Old ID: {post_id}, New ID: {new_post_id}, "
+                f"Schedule: {request.schedule_date}"
+            )
+            
+            return {
+                "success": True,
+                "message": f"Post postponed successfully to {request.schedule_date}",
+                "old_post_id": post_id,
+                "new_post_id": new_post_id,
+                "new_schedule_date": request.schedule_date,
+                "ghl_response": create_result
+            }
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[SOCIAL POSTS] Error postponing post: {e}")
         raise HTTPException(status_code=500, detail=str(e))
