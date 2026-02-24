@@ -47,7 +47,6 @@ async def get_ghl_credentials(firm_user_id: str, agent_id: str = "SOL"):
             .execute()
 
         if not ghl_result.data:
-            logger.warning(f"[SOCIAL POSTS] No GHL record found for user: {firm_user_id}")
             return None
 
         return {
@@ -55,7 +54,6 @@ async def get_ghl_credentials(firm_user_id: str, agent_id: str = "SOL"):
             'pit_token': ghl_result.data.get('access_token') or ghl_result.data.get('pit_token')
         }
     except Exception as e:
-        logger.error(f"[SOCIAL POSTS] Error fetching GHL credentials: {e}")
         return None
 
 
@@ -80,7 +78,6 @@ async def get_connected_accounts(location_id: str, pit_token: str) -> dict:
             
             if response.is_success:
                 data = response.json()
-                logger.info(f"[SOCIAL POSTS] Accounts API response: {data}")
                 accounts = data.get('accounts', []) or data.get('data', []) or []
                 
                 for account in accounts:
@@ -95,10 +92,9 @@ async def get_connected_accounts(location_id: str, pit_token: str) -> dict:
                         if platform_user_id:
                             account_platform_map[str(platform_user_id)] = platform
                 
-                logger.info(f"[SOCIAL POSTS] Account platform map: {account_platform_map}")
                         
     except Exception as e:
-        logger.warning(f"[SOCIAL POSTS] Error fetching connected accounts: {e}")
+        pass
     
     return account_platform_map
 
@@ -222,7 +218,7 @@ async def get_social_posts(request: ScheduledPostsRequest):
                         if (post_id and draft_map.get(post_id)) or (schedule_date and schedule_date.startswith('2099')):
                             post['isDrafted'] = True
                 except Exception as e:
-                    logger.warning(f"[SOCIAL POSTS] Failed to check draft status: {e}")
+                    pass
             
             # Separate by status
             scheduled = [p for p in posts if p.get('status', '').lower() in ['scheduled', 'pending', 'draft', 'queued']]
@@ -239,7 +235,6 @@ async def get_social_posts(request: ScheduledPostsRequest):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"[SOCIAL POSTS] Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -346,7 +341,6 @@ async def check_post_draft_status(
         return {"is_drafted": status == 'drafted'}
         
     except Exception as e:
-        logger.error(f"[SOCIAL POSTS] Error checking draft status: {e}")
         return {"is_drafted": False}
 
 
@@ -390,7 +384,6 @@ async def delete_social_post(
                     raise HTTPException(status_code=404, detail="Post not found or already deleted.")
                 raise HTTPException(status_code=response.status_code, detail=f"GHL API error: {response.text}")
             
-            logger.info(f"[SOCIAL POSTS] Post {post_id} deleted successfully for user {firm_user_id}")
             
             # Update post_confirmation_checker table
             try:
@@ -400,10 +393,9 @@ async def delete_social_post(
                     .eq('post_id', post_id)\
                     .execute()
                     
-                logger.info(f"[SOCIAL POSTS] Deleted post_confirmation_checker record for post {post_id}")
                 
             except Exception as e:
-                logger.warning(f"[SOCIAL POSTS] Failed to delete post_confirmation_checker record: {e}")
+                    pass
             
             return {
                 "success": True,
@@ -414,7 +406,6 @@ async def delete_social_post(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"[SOCIAL POSTS] Error deleting post: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -476,7 +467,6 @@ async def edit_social_post(
             elif 'post' in existing_post:
                 post_data = existing_post['post']
             
-            logger.info(f"[SOCIAL POSTS] Existing post data: {post_data}")
             
             # Check if post is already published - cannot edit published posts
             post_status = post_data.get('status', '').lower()
@@ -650,7 +640,6 @@ async def edit_social_post(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"[SOCIAL POSTS] Error editing post: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 class PostponePostRequest(BaseModel):
@@ -712,8 +701,6 @@ async def postpone_social_post(
             elif 'post' in existing_post:
                 post_data = existing_post['post']
             
-            logger.info(f"[SOCIAL POSTS] Existing post data keys: {list(post_data.keys())}")
-            logger.info(f"[SOCIAL POSTS] Existing post full data: {post_data}")
             
             # Check if post is already published - cannot postpone published posts
             post_status = post_data.get('status', '').lower()
@@ -884,5 +871,4 @@ async def postpone_social_post(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"[SOCIAL POSTS] Error postponing post: {e}")
         raise HTTPException(status_code=500, detail=str(e))
