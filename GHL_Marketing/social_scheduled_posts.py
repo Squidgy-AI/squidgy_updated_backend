@@ -642,17 +642,11 @@ async def edit_social_post(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-class PostponePostRequest(BaseModel):
-    firm_user_id: str
-    post_id: str
-    schedule_date: Optional[str] = "2099-12-31T23:59:59.999Z"
-    agent_id: Optional[str] = "SOL"
-
-
-@router.put("/posts/{post_id}/postpone")
+@router.get("/posts/{post_id}/postpone")
 async def postpone_social_post(
     post_id: str,
-    request: PostponePostRequest
+    firm_user_id: str = Query(..., description="User ID"),
+    agent_id: str = Query(default="SOL", description="Agent ID")
 ):
     """
     Postpone a scheduled social media post by deleting it and recreating 
@@ -660,7 +654,7 @@ async def postpone_social_post(
     immediately, so delete + recreate is the safer approach.
     """
     try:
-        credentials = await get_ghl_credentials(request.firm_user_id, request.agent_id)
+        credentials = await get_ghl_credentials(firm_user_id, agent_id)
         
         if not credentials:
             raise HTTPException(status_code=404, detail="GHL account not found. Please complete GHL setup.")
@@ -735,12 +729,13 @@ async def postpone_social_post(
                     detail=f"Failed to delete post: {delete_response.text}"
                 )
             
-            # Step 3: Recreate the post with the postponed schedule date
+            # Step 3: Recreate the post with the postponed schedule date (2099)
+            schedule_date = "2099-12-31T23:59:59.999Z"
             create_payload = {
                 'userId': location_id,
                 'type': post_data.get('type', 'post'),
                 'status': 'scheduled',
-                'scheduleDate': request.schedule_date,
+                'scheduleDate': schedule_date,
                 'accountIds': account_ids,
                 'media': post_data.get('media', []),
                 'summary': post_data.get('summary', ''),
@@ -840,9 +835,9 @@ async def postpone_social_post(
                 if new_post_id != 'unknown':
                     # Create new record with the NEW post_id from recreation
                     checker_payload = {
-                        'user_id': request.firm_user_id,
+                        'user_id': firm_user_id,
                         'payload': create_payload,
-                        'scheduled_for': request.schedule_date,
+                        'scheduled_for': schedule_date,
                         'ghl_location_id': location_id,
                         'platform': resolve_platform_from_account(post_data, {}),
                         'post_id': new_post_id,  # Use the NEW post ID
@@ -861,10 +856,10 @@ async def postpone_social_post(
             
             return {
                 "success": True,
-                "message": f"Post postponed successfully to {request.schedule_date}",
+                "message": f"Post postponed successfully to {schedule_date}",
                 "old_post_id": post_id,
                 "new_post_id": new_post_id,
-                "new_schedule_date": request.schedule_date,
+                "new_schedule_date": schedule_date,
                 "ghl_response": create_result
             }
             
