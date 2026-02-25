@@ -35,6 +35,88 @@ class DeleteUserRequest(BaseModel):
     admin_user_id: str
 
 
+class ImpersonateUserRequest(BaseModel):
+    target_user_id: str
+    admin_user_id: str
+
+
+@router.post("/impersonate-user")
+async def impersonate_user(request: ImpersonateUserRequest):
+    """
+    Allow admin to impersonate a user by generating a session token for that user.
+    Returns the target user's profile and auth session tokens.
+    """
+    try:
+        supabase = get_admin_supabase()
+        target_user_id = request.target_user_id
+        admin_user_id = request.admin_user_id
+        
+        logger.info(f"Admin {admin_user_id} impersonating user {target_user_id}")
+        
+        # Verify admin has permission
+        admin_profile = supabase.table('profiles').select('is_super_admin').eq('user_id', admin_user_id).execute()
+        if not admin_profile.data or not admin_profile.data[0].get('is_super_admin'):
+            raise HTTPException(status_code=403, detail="Only super admins can impersonate users")
+        
+        # Get target user's profile
+        target_profile = supabase.table('profiles').select('*').eq('user_id', target_user_id).execute()
+        if not target_profile.data:
+            raise HTTPException(status_code=404, detail="Target user not found")
+        
+        profile = target_profile.data[0]
+        auth_id = profile.get('id')  # This is the auth.users.id
+        
+        # For impersonation, we'll return the user profile and let the frontend
+        # handle the session by storing the admin's session and switching the userId
+        # The admin remains authenticated but views data as the target user
+        try:
+            import time
+            now = int(time.time())
+            
+            # Simply return the target user's profile
+            # The frontend will keep the admin's auth session but switch the userId context
+            session_data = {
+                'impersonation_mode': True,
+                'target_user_id': target_user_id,
+                'target_auth_id': auth_id
+            }
+            
+            logger.info(f"Impersonation setup for admin {admin_user_id} to view as {profile.get('email')}")
+            
+            # Log the impersonation action
+            try:
+                supabase.table('admin_audit_logs').insert({
+                    'admin_user_id': admin_user_id,
+                    'action': 'impersonate_user',
+                    'target_user_id': target_user_id,
+                    'details': {
+                        'target_email': profile.get('email'),
+                        'target_name': profile.get('full_name'),
+                        'timestamp': now
+                    }
+                }).execute()
+            except Exception as audit_error:
+                logger.warning(f"Failed to log impersonation action: {audit_error}")
+                pass  # Don't fail if audit log fails
+            
+            return {
+                "success": True,
+                "profile": profile,
+                "impersonation_data": session_data,
+                "message": f"Impersonation mode enabled for {profile.get('email')}"
+            }
+            
+        except Exception as e:
+            logger.error(f"Error generating impersonation session: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Failed to create impersonation session: {str(e)}")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error impersonating user: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/delete-user")
 async def delete_user(request: DeleteUserRequest):
     """
