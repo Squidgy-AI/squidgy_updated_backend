@@ -4516,10 +4516,6 @@ async def trigger_pit_automation(ghl_record_id: str):
         # Validate required fields
         if not ghl_data.get('ghl_location_id'):
             raise HTTPException(status_code=400, detail="Location ID not found in record")
-        if not ghl_data.get('soma_ghl_email'):
-            raise HTTPException(status_code=400, detail="Soma email not found in record")
-        if not ghl_data.get('soma_ghl_password'):
-            raise HTTPException(status_code=400, detail="Soma password not found in record")
         
         # PIT automation - COMMENTED OUT (NOT NEEDED)
         # We removed authorization header from all social media API calls
@@ -4695,8 +4691,6 @@ async def retry_ghl_automation(request: dict):
                     f"{automation_service_url}/ghl/complete-automation",
                     json={
                         "location_id": location_id,
-                        "email": soma_email or ghl_data.get('soma_ghl_email'),
-                        "password": "Dummy@123",
                         "firm_user_id": firm_user_id,
                         "ghl_user_id": soma_user_id
                     }
@@ -4836,12 +4830,10 @@ async def refresh_ghl_tokens(firm_user_id: str, agent_id: str = "SOL"):
 
         ghl_data = ghl_result.data
         location_id = ghl_data.get('ghl_location_id')
-        soma_email = ghl_data.get('soma_ghl_email')
-        soma_password = ghl_data.get('soma_ghl_password')
         soma_user_id = ghl_data.get('soma_ghl_user_id')
 
-        if not all([location_id, soma_email, soma_password]):
-            raise HTTPException(status_code=400, detail="Missing GHL credentials")
+        if not location_id:
+            raise HTTPException(status_code=400, detail="Missing GHL location ID")
 
         # Update status to indicate refresh is running
         supabase.table('ghl_subaccounts').update({
@@ -4859,8 +4851,6 @@ async def refresh_ghl_tokens(firm_user_id: str, agent_id: str = "SOL"):
                 f"{automation_service_url}/ghl/complete-automation",
                 json={
                     "location_id": location_id,
-                    "email": soma_email,
-                    "password": soma_password,
                     "firm_user_id": firm_user_id,
                     "ghl_user_id": soma_user_id
                 }
