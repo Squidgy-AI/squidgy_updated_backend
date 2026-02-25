@@ -1475,6 +1475,22 @@ class HighLevelCompleteAutomationPlaywright:
                 
                 print("[✅ DATABASE] Successfully saved to facebook_integrations table!")
                 print(f"[📊 DATABASE] Record ID: {result.data[0]['id'] if result.data else 'Generated'}")
+                
+                # CRITICAL: Update ghl_subaccounts table to mark automation as completed
+                # This prevents the status from being stuck at "running" forever
+                try:
+                    ghl_update = supabase.table('ghl_subaccounts').update({
+                        'pit_token': pit_token,
+                        'access_token': self.access_token,
+                        'firebase_token': self.firebase_token,
+                        'automation_status': 'completed',
+                        'automation_error': None,
+                        'updated_at': datetime.now().isoformat()
+                    }).eq('firm_user_id', firm_user_id).eq('ghl_location_id', ghl_location_id).execute()
+                    
+                    print("[✅ DATABASE] Successfully updated ghl_subaccounts automation_status to 'completed'")
+                except Exception as ghl_error:
+                    print(f"[⚠️ DATABASE] Warning: Could not update ghl_subaccounts: {ghl_error}")
             else:
                 print("[📝 DATABASE] Skipped database save - handled by main backend code")
             

@@ -4681,50 +4681,137 @@ async def retry_ghl_automation(request: dict):
         # Trigger browser automation to capture firebase_token
         automation_service_url = os.getenv('AUTOMATION_USER1_SERVICE_URL', 'https://backgroundautomationuser1-1644057ede7b.herokuapp.com')
         
-        # Update status
+        # Update status to running
         supabase.table('ghl_subaccounts').update({
             'automation_status': 'running',
             'automation_error': None,
             'updated_at': datetime.now().isoformat()
         }).eq('id', ghl_record_id).execute()
         
-        async with httpx.AsyncClient(timeout=300.0) as client:
-            response = await client.post(
-                f"{automation_service_url}/ghl/complete-automation",
-                json={
-                    "location_id": location_id,
-                    "email": soma_email or ghl_data.get('soma_ghl_email'),
-                    "password": "Dummy@123",
-                    "firm_user_id": firm_user_id,
-                    "ghl_user_id": soma_user_id
-                }
-            )
+        try:
+            # Call automation service with timeout
+            async with httpx.AsyncClient(timeout=30.0) as client:  # 30 second timeout for API call
+                response = await client.post(
+                    f"{automation_service_url}/ghl/complete-automation",
+                    json={
+                        "location_id": location_id,
+                        "email": soma_email or ghl_data.get('soma_ghl_email'),
+                        "password": "Dummy@123",
+                        "firm_user_id": firm_user_id,
+                        "ghl_user_id": soma_user_id
+                    }
+                )
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    
+                    # Automation service accepted the task and will update DB when complete
+                    # The background task in automation service will update automation_status to 'completed' or 'failed'
+                    return {
+                        "success": True,
+                        "message": "GHL automation retry started - background task will update status when complete",
+                        "firm_user_id": firm_user_id,
+                        "location_id": location_id,
+                        "soma_user_id": soma_user_id,
+                        "status": "running",
+                        "task_id": result.get('task_id'),
+                        "note": "Check automation_status in ghl_subaccounts table for completion"
+                    }
+                else:
+                    error_msg = f"Automation service returned error: {response.status_code} - {response.text}"
+                    
+                    supabase.table('ghl_subaccounts').update({
+                        'automation_status': 'failed',
+                        'automation_error': error_msg,
+                        'updated_at': datetime.now().isoformat()
+                    }).eq('id', ghl_record_id).execute()
+                    
+                    raise HTTPException(status_code=500, detail=error_msg)
+                    
+        except httpx.TimeoutException:
+            error_msg = "Automation service request timed out (30s) - service may be down or overloaded"
             
-            if response.status_code == 200:
-                result = response.json()
-                
-                return {
-                    "success": True,
-                    "message": "GHL automation retry started",
-                    "firm_user_id": firm_user_id,
-                    "location_id": location_id,
-                    "soma_user_id": soma_user_id,
-                    "status": "running"
-                }
-            else:
-                error_msg = f"Automation service error: {response.status_code} - {response.text}"
-                
-                supabase.table('ghl_subaccounts').update({
-                    'automation_status': 'failed',
-                    'automation_error': error_msg,
-                    'updated_at': datetime.now().isoformat()
-                }).eq('id', ghl_record_id).execute()
-                
-                raise HTTPException(status_code=500, detail=error_msg)
+            supabase.table('ghl_subaccounts').update({
+                'automation_status': 'failed',
+                'automation_error': error_msg,
+                'updated_at': datetime.now().isoformat()
+            }).eq('id', ghl_record_id).execute()
+            
+            raise HTTPException(status_code=504, detail=error_msg)
+            
+        except httpx.RequestError as req_err:
+            error_msg = f"Failed to connect to automation service: {str(req_err)}"
+            
+            supabase.table('ghl_subaccounts').update({
+                'automation_status': 'failed',
+                'automation_error': error_msg,
+                'updated_at': datetime.now().isoformat()
+            }).eq('id', ghl_record_id).execute()
+            
+            raise HTTPException(status_code=503, detail=error_msg)
                 
     except HTTPException:
         raise
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/ghl/cleanup-stuck-automations")
+async def cleanup_stuck_automations():
+    """
+    Cleanup automations that have been stuck in 'running' state for too long (>10 minutes)
+    This prevents automations from being stuck forever if the background service crashes
+    """
+    try:
+        print("[CLEANUP] 🧹 Checking for stuck automations...")
+        
+        # Get all records with running status
+        result = supabase.table('ghl_subaccounts')\
+            .select('*')\
+            .eq('automation_status', 'running')\
+            .execute()
+        
+        if not result.data:
+            return {
+                "message": "No stuck automations found",
+                "cleaned_count": 0
+            }
+        
+        cleaned_count = 0
+        current_time = datetime.now(timezone.utc)
+        
+        for record in result.data:
+            updated_at = record.get('updated_at')
+            if not updated_at:
+                continue
+            
+            # Parse the timestamp
+            try:
+                updated_time = datetime.fromisoformat(updated_at.replace('Z', '+00:00'))
+                time_diff = (current_time - updated_time).total_seconds() / 60  # minutes
+                
+                # If running for more than 10 minutes, mark as failed
+                if time_diff > 10:
+                    print(f"[CLEANUP] Found stuck automation for user {record['firm_user_id']} (running for {time_diff:.1f} minutes)")
+                    
+                    supabase.table('ghl_subaccounts').update({
+                        'automation_status': 'failed',
+                        'automation_error': f'Automation timed out after {time_diff:.1f} minutes - marked as failed by cleanup',
+                        'updated_at': datetime.now().isoformat()
+                    }).eq('id', record['id']).execute()
+                    
+                    cleaned_count += 1
+            except Exception as parse_error:
+                print(f"[CLEANUP] Error parsing timestamp for record {record['id']}: {parse_error}")
+        
+        print(f"[CLEANUP] ✅ Cleaned up {cleaned_count} stuck automations")
+        
+        return {
+            "message": f"Cleaned up {cleaned_count} stuck automations",
+            "cleaned_count": cleaned_count
+        }
+        
+    except Exception as e:
+        print(f"[CLEANUP] ❌ Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/ghl/refresh-tokens/{firm_user_id}")
