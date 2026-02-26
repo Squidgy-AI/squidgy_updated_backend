@@ -1,6 +1,6 @@
 """
 Social Media - Scheduled Posts API Routes
-Fetches social media posts from GHL API using pit_token
+Fetches social media posts from GHL API using pit_token for Authorization
 """
 
 import os
@@ -40,7 +40,7 @@ async def get_ghl_credentials(firm_user_id: str, agent_id: str = "SOL"):
     """
     try:
         ghl_result = supabase.table('ghl_subaccounts')\
-            .select('ghl_location_id, pit_token, access_token')\
+            .select('ghl_location_id, pit_token')\
             .eq('firm_user_id', firm_user_id)\
             .eq('agent_id', agent_id)\
             .single()\
@@ -51,7 +51,7 @@ async def get_ghl_credentials(firm_user_id: str, agent_id: str = "SOL"):
 
         return {
             'location_id': ghl_result.data.get('ghl_location_id'),
-            'pit_token': ghl_result.data.get('access_token') or ghl_result.data.get('pit_token')
+            'pit_token': ghl_result.data.get('pit_token')
         }
     except Exception as e:
         return None
