@@ -6989,8 +6989,10 @@ async def save_text_knowledge(
         # Generate unique file_id for text entry
         file_id = f"text_{uuid.uuid4().hex[:12]}"
         
-        # Insert into firm_users_knowledge_base table
-        result = supabase.table("firm_users_knowledge_base").insert({
+        # Use upsert to handle ON CONFLICT (firm_user_id, file_name)
+        # Note: "User Input" is a static file_name, so this will update the same record
+        # for multiple text inputs from the same user
+        result = supabase.table("firm_users_knowledge_base").upsert({
             "firm_user_id": firm_user_id,
             "file_id": file_id,
             "file_name": "User Input",
@@ -6998,10 +7000,8 @@ async def save_text_knowledge(
             "agent_id": agent_id,
             "agent_name": agent_name,
             "extracted_text": text_content.strip(),
-            "processing_status": "completed",
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "updated_at": datetime.now(timezone.utc).isoformat()
-        }).execute()
+            "processing_status": "completed"
+        }, on_conflict="firm_user_id,file_name").execute()
         
         if not result.data:
             raise HTTPException(status_code=500, detail="Failed to save text knowledge")

@@ -21,6 +21,56 @@ class FileProcessingService:
         """Generate unique file ID"""
         return f"file_{uuid.uuid4().hex[:12]}"
     
+    def extract_storage_path_from_url(self, file_url: str) -> Optional[str]:
+        """
+        Extract storage path from Supabase public URL
+        
+        Example URL: https://[project].supabase.co/storage/v1/object/public/newsletter/user123_1234567890_document.pdf
+        Returns: user123_1234567890_document.pdf
+        """
+        try:
+            if not file_url or file_url == "":
+                return None
+            
+            # Split by '/newsletter/' to get the path after bucket name
+            if '/newsletter/' in file_url:
+                return file_url.split('/newsletter/')[-1]
+            
+            return None
+        except Exception as e:
+            logger.error(f"Error extracting storage path from URL: {str(e)}")
+            return None
+    
+    async def delete_old_storage_file(self, file_url: str) -> bool:
+        """
+        Delete old file from Supabase storage
+        
+        Args:
+            file_url: Supabase storage public URL
+            
+        Returns:
+            True if deleted successfully or file doesn't exist, False on error
+        """
+        try:
+            if not file_url or file_url == "":
+                return True  # No file to delete
+            
+            storage_path = self.extract_storage_path_from_url(file_url)
+            if not storage_path:
+                logger.warning(f"Could not extract storage path from URL: {file_url}")
+                return True  # Don't fail the operation
+            
+            # Delete from Supabase storage
+            response = self.supabase.storage.from_('newsletter').remove([storage_path])
+            
+            logger.info(f"Deleted old storage file: {storage_path}")
+            return True
+            
+        except Exception as e:
+            # Log error but don't fail the operation - orphaned files are not critical
+            logger.warning(f"Failed to delete old storage file (non-critical): {str(e)}")
+            return True
+    
     async def create_processing_record(
         self,
         firm_user_id: str,
@@ -30,7 +80,11 @@ class FileProcessingService:
         agent_name: str
     ) -> Dict[str, Any]:
         """
-        Create a new file processing record
+        Create or update a file processing record using upsert logic.
+        
+        If a file with the same firm_user_id and file_name exists, it will be updated
+        and the old storage file will be deleted to prevent orphans.
+        This matches the database constraint: UNIQUE (firm_user_id, file_name)
         
         Args:
             firm_user_id: User ID from frontend
@@ -43,6 +97,18 @@ class FileProcessingService:
             Dictionary with record data or error information
         """
         try:
+            # Check if record already exists for this user and filename
+            existing_response = self.supabase.table("firm_users_knowledge_base").select("file_url").eq(
+                "firm_user_id", firm_user_id
+            ).eq("file_name", file_name).execute()
+            
+            # If record exists and has a file_url, delete the old storage file
+            if existing_response.data and len(existing_response.data) > 0:
+                old_file_url = existing_response.data[0].get("file_url")
+                if old_file_url and old_file_url != file_url:
+                    logger.info(f"Deleting old storage file for {file_name} before update")
+                    await self.delete_old_storage_file(old_file_url)
+            
             file_id = self.generate_file_id()
             
             record_data = {
@@ -52,29 +118,37 @@ class FileProcessingService:
                 "file_url": file_url,
                 "agent_id": agent_id,
                 "agent_name": agent_name,
-                "processing_status": "pending"
+                "processing_status": "pending",
+                "extracted_text": None,
+                "error_message": None
             }
             
-            response = self.supabase.table("firm_users_knowledge_base").insert(record_data).execute()
+            # Use upsert to handle ON CONFLICT (firm_user_id, file_name)
+            # This will update existing records or insert new ones
+            response = self.supabase.table("firm_users_knowledge_base").upsert(
+                record_data,
+                on_conflict="firm_user_id,file_name"
+            ).execute()
             
             if response.data:
-                logger.info(f"Created file processing record: {file_id}")
+                returned_file_id = response.data[0].get("file_id", file_id)
+                logger.info(f"Upserted file processing record: {returned_file_id} (firm_user_id: {firm_user_id}, file_name: {file_name})")
                 return {
                     "success": True,
                     "data": response.data[0],
-                    "file_id": file_id,
-                    "message": "File processing record created"
+                    "file_id": returned_file_id,
+                    "message": "File processing record created/updated"
                 }
             else:
-                logger.error("Failed to create file processing record: No data returned")
+                logger.error("Failed to upsert file processing record: No data returned")
                 return {
                     "success": False,
-                    "error": "Failed to create record - no data returned",
+                    "error": "Failed to create/update record - no data returned",
                     "data": None
                 }
                 
         except Exception as e:
-            logger.error(f"Error creating file processing record: {str(e)}")
+            logger.error(f"Error upserting file processing record: {str(e)}")
             return {
                 "success": False,
                 "error": f"Database error: {str(e)}",
