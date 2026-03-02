@@ -17,10 +17,6 @@ class FileProcessingService:
     def __init__(self, supabase_client: Client):
         self.supabase = supabase_client
     
-    def generate_file_id(self) -> str:
-        """Generate unique file ID"""
-        return f"file_{uuid.uuid4().hex[:12]}"
-    
     def extract_storage_path_from_url(self, file_url: str) -> Optional[tuple[str, str]]:
         """
         Extract bucket name and storage path from Supabase public URL
@@ -126,16 +122,15 @@ class FileProcessingService:
             
             # If record exists, update it; otherwise insert new record
             if existing_record:
-                # UPDATE existing record
-                file_id = self.generate_file_id()
+                # UPDATE existing record - use the existing primary key 'id'
+                record_id = str(existing_record.get("id"))
                 old_neon_ids = existing_record.get("neon_record_ids", [])
                 
                 # Delete old Neon records if they exist
                 if old_neon_ids and len(old_neon_ids) > 0:
-                    await self.delete_neon_records(old_neon_ids)
+                    await self.delete_neon_records(old_neon_ids, file_name, firm_user_id)
                 
                 update_data = {
-                    "file_id": file_id,
                     "file_url": file_url,
                     "agent_id": agent_id,
                     "agent_name": agent_name,
@@ -148,43 +143,37 @@ class FileProcessingService:
                     "firm_user_id", firm_user_id
                 ).eq("file_name", file_name).execute()
                 
-                logger.info(f"Updated existing file record: {file_id} (firm_user_id: {firm_user_id}, file_name: {file_name})")
-                logger.info(f"Update response data: {response.data}")
+                logger.info(f"Updated existing file record: {record_id} (firm_user_id: {firm_user_id}, file_name: {file_name})")
                 
-                # Fetch the record after update if response data is empty
-                if not response.data:
-                    logger.info(f"Fetching updated record for {file_id}...")
-                    updated_response = self.supabase.table("firm_users_knowledge_base").select("*").eq("file_id", file_id).execute()
+                if response.data:
+                    return {
+                        "success": True,
+                        "data": response.data[0],
+                        "id": record_id,
+                        "message": "File processing record updated"
+                    }
+                else:
+                    # Fetch the record after update if response data is empty
+                    updated_response = self.supabase.table("firm_users_knowledge_base").select("*").eq(
+                        "firm_user_id", firm_user_id
+                    ).eq("file_name", file_name).execute()
                     if updated_response.data and len(updated_response.data) > 0:
-                        logger.info(f"Fetched updated record for {file_id}")
                         return {
                             "success": True,
                             "data": updated_response.data[0],
-                            "file_id": file_id,
-                            "message": "File processing record created/updated"
+                            "id": record_id,
+                            "message": "File processing record updated"
                         }
                     else:
-                        logger.error(f"Failed to fetch updated record for {file_id}")
                         return {
                             "success": False,
                             "error": "Failed to fetch updated record",
                             "data": None
                         }
-                else:
-                    returned_file_id = response.data[0].get("file_id", file_id)
-                    return {
-                        "success": True,
-                        "data": response.data[0],
-                        "file_id": returned_file_id,
-                        "message": "File processing record created/updated"
-                    }
             else:
-                # INSERT new record
-                file_id = self.generate_file_id()
-                
+                # INSERT new record - Supabase auto-generates 'id'
                 record_data = {
                     "firm_user_id": firm_user_id,
-                    "file_id": file_id,
                     "file_name": file_name,
                     "file_url": file_url,
                     "agent_id": agent_id,
@@ -195,23 +184,22 @@ class FileProcessingService:
                 
                 response = self.supabase.table("firm_users_knowledge_base").insert(record_data).execute()
                 
-                logger.info(f"Inserted new file record: {file_id} (firm_user_id: {firm_user_id}, file_name: {file_name})")
-            
-            if response.data:
-                returned_file_id = response.data[0].get("file_id", file_id)
-                return {
-                    "success": True,
-                    "data": response.data[0],
-                    "file_id": returned_file_id,
-                    "message": "File processing record created/updated"
-                }
-            else:
-                logger.error("Failed to create/update file processing record: No data returned")
-                return {
-                    "success": False,
-                    "error": "Failed to create/update record - no data returned",
-                    "data": None
-                }
+                if response.data:
+                    record_id = str(response.data[0].get("id"))
+                    logger.info(f"Inserted new file record: {record_id} (firm_user_id: {firm_user_id}, file_name: {file_name})")
+                    return {
+                        "success": True,
+                        "data": response.data[0],
+                        "id": record_id,
+                        "message": "File processing record created"
+                    }
+                else:
+                    logger.error("Failed to create file processing record: No data returned")
+                    return {
+                        "success": False,
+                        "error": "Failed to create record - no data returned",
+                        "data": None
+                    }
                 
         except Exception as e:
             logger.error(f"Error upserting file processing record: {str(e)}")
@@ -223,14 +211,14 @@ class FileProcessingService:
     
     async def update_neon_record_ids(
         self,
-        file_id: str,
+        record_id: str,
         neon_record_ids: list
     ) -> Dict[str, Any]:
         """
         Update the neon_record_ids after text extraction and embedding
         
         Args:
-            file_id: Unique file identifier
+            record_id: Primary key 'id' of the record
             neon_record_ids: List of Neon DB record IDs for this file's chunks
             
         Returns:
@@ -242,25 +230,27 @@ class FileProcessingService:
                 "updated_at": datetime.utcnow().isoformat()
             }
             
-            response = self.supabase.table("firm_users_knowledge_base").update(update_data).eq("file_id", file_id).execute()
+            response = self.supabase.table("firm_users_knowledge_base").update(update_data).eq("id", record_id).execute()
             
             if response.data:
-                logger.info(f"Updated neon_record_ids for {file_id}: {len(neon_record_ids)} records")
+                logger.info(f"Updated neon_record_ids for {record_id}: {len(neon_record_ids)} records")
                 return {"success": True, "message": "Neon record IDs updated"}
             else:
-                logger.error(f"Failed to update neon_record_ids for {file_id}")
+                logger.error(f"Failed to update neon_record_ids for {record_id}")
                 return {"success": False, "error": "Update failed"}
                 
         except Exception as e:
             logger.error(f"Error updating neon_record_ids: {str(e)}")
             return {"success": False, "error": str(e)}
     
-    async def delete_neon_records(self, neon_record_ids: list) -> bool:
+    async def delete_neon_records(self, neon_record_ids: list, file_name: str = None, firm_user_id: str = None) -> bool:
         """
         Delete Neon records by their IDs (called when replacing a file)
         
         Args:
             neon_record_ids: List of Neon DB record IDs to delete
+            file_name: Optional file name for fallback deletion
+            firm_user_id: Optional user ID for fallback deletion
             
         Returns:
             True if successful, False otherwise
@@ -291,15 +281,29 @@ class FileProcessingService:
             )
             
             try:
-                # Convert string IDs to integers (they're stored as strings to avoid scientific notation)
-                int_ids = [int(id) for id in neon_record_ids]
+                # Try to convert string IDs to integers (new format)
+                try:
+                    int_ids = [int(id) for id in neon_record_ids]
+                    deleted = await conn.execute(
+                        "DELETE FROM user_vector_knowledge_base WHERE id = ANY($1::int[])",
+                        int_ids
+                    )
+                    logger.info(f"Deleted {len(int_ids)} Neon records by ID")
+                except ValueError:
+                    # IDs are UUIDs - can't delete by ID directly
+                    # Fall back to deleting by file_name and user_id if provided
+                    logger.warning(f"neon_record_ids are UUIDs, cannot delete by ID: {neon_record_ids[:3]}...")
+                    
+                    if file_name and firm_user_id:
+                        query = """
+                            DELETE FROM user_vector_knowledge_base 
+                            WHERE file_name = $1 AND user_id = $2
+                        """
+                        deleted = await conn.execute(query, file_name, firm_user_id)
+                        logger.info(f"Deleted Neon records by file_name '{file_name}' and user_id")
+                    else:
+                        logger.warning("Cannot delete UUID records without file_name and firm_user_id")
                 
-                # Delete records by IDs
-                deleted = await conn.execute(
-                    "DELETE FROM user_vector_knowledge_base WHERE id = ANY($1::int[])",
-                    int_ids
-                )
-                logger.info(f"Deleted {len(int_ids)} Neon records")
                 return True
             finally:
                 await conn.close()
@@ -308,20 +312,20 @@ class FileProcessingService:
             logger.warning(f"Failed to delete Neon records (non-critical): {str(e)}")
             return True  # Don't fail the operation
     
-    async def get_processing_record(self, file_id: str) -> Dict[str, Any]:
-        """Get processing record by file_id"""
+    async def get_processing_record(self, record_id: str) -> Dict[str, Any]:
+        """Get processing record by primary key 'id'"""
         try:
-            logger.debug(f"Looking up file_id: {file_id}")
-            response = self.supabase.table("firm_users_knowledge_base").select("*").eq("file_id", file_id).execute()
+            logger.debug(f"Looking up record id: {record_id}")
+            response = self.supabase.table("firm_users_knowledge_base").select("*").eq("id", record_id).execute()
             
             if response.data and len(response.data) > 0:
-                logger.debug(f"Found record for {file_id}")
+                logger.debug(f"Found record for {record_id}")
                 return {
                     "success": True,
                     "data": response.data[0]
                 }
             else:
-                logger.warning(f"Record not found for file_id: {file_id}")
+                logger.warning(f"Record not found for id: {record_id}")
                 return {
                     "success": False,
                     "error": "Record not found"

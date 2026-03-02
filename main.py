@@ -2603,7 +2603,8 @@ Tags: {', '.join(tags) if tags else 'None'}
             content=kb_document,
             source='website_analysis',
             file_name=f"Website: {company_name or business_domain}",
-            file_url=normalized_url
+            file_url=normalized_url,
+            agent_name=request.agent_id
         )
         # ========== END KNOWLEDGE BASE SAVE ==========
 
@@ -6778,7 +6779,7 @@ async def process_file_from_url(
             logger.error(f"Failed to create processing record: {result['error']}")
             raise HTTPException(status_code=500, detail=f"Failed to create record: {result['error']}")
         
-        file_id = result["file_id"]
+        file_id = result["id"]
         logger.info(f"Created processing record: {file_id}")
         
         # Start background text extraction
@@ -6886,9 +6887,10 @@ async def extract_text_from_file(request: FileExtractionRequest):
                 user_id=user_id,
                 agent_id=agent_id,
                 content=extracted_text,
-                source='chat_file_upload',
+                source='agent_settings',
                 file_name=file_name,
-                file_url=file_url
+                file_url=file_url,
+                agent_name=agent_id  # Use agent_id as name if not provided
             )
             logger.info(f"KB save result: {kb_saved}")
 
@@ -7075,7 +7077,7 @@ async def get_unified_user_files(firm_user_id: str, agent_id: str):
                     file_type = "document"
                 
                 all_files.append({
-                    "file_id": file.get("file_id"),
+                    "id": file.get("id"),
                     "file_name": file_name,
                     "file_url": file.get("file_url"),
                     "created_at": file.get("created_at"),
@@ -7110,7 +7112,7 @@ async def get_unified_user_files(firm_user_id: str, agent_id: str):
                     # No agent_id filter so users can see all their uploads
                     query = """
                         SELECT
-                            (MIN(id::text))::uuid as file_id,
+                            (MIN(id::text))::uuid as id,
                             file_name,
                             file_url,
                             MAX(created_at) as created_at,
@@ -7138,7 +7140,7 @@ async def get_unified_user_files(firm_user_id: str, agent_id: str):
                                 file_type = "document"
                             
                             all_files.append({
-                                'file_id': str(row['file_id']),
+                                'id': str(row['id']),
                                 'file_name': file_name,
                                 'file_url': row['file_url'],
                                 'created_at': row['created_at'].isoformat() if row['created_at'] else None,
@@ -7292,6 +7294,20 @@ async def save_file_knowledge(
         if not all([user_id, agent_id, agent_name]):
             raise HTTPException(status_code=400, detail="All fields are required")
         
+        # Check if file already exists in tracking table
+        existing_response = supabase.table("firm_users_knowledge_base").select("*").eq(
+            "firm_user_id", user_id
+        ).eq("file_name", file_name).execute()
+        
+        old_neon_ids = []
+        old_file_url = None
+        
+        if existing_response.data and len(existing_response.data) > 0:
+            existing_record = existing_response.data[0]
+            old_neon_ids = existing_record.get("neon_record_ids", []) or []
+            old_file_url = existing_record.get("file_url")
+            logger.info(f"Found existing file '{file_name}' - will replace it")
+        
         # Read file content
         file_content = await file.read()
         
@@ -7322,48 +7338,37 @@ async def save_file_knowledge(
         # Get public URL
         file_url = supabase.storage.from_('agentkbs').get_public_url(storage_path)
         
-        # Save metadata to Neon database (user_vector_knowledge_base table)
-        if not all([NEON_DB_HOST, NEON_DB_USER, NEON_DB_PASSWORD]):
-            raise HTTPException(status_code=500, detail="Neon database configuration missing")
+        # Delete old storage file if it exists and is different
+        if old_file_url and old_file_url != file_url:
+            logger.info(f"Deleting old storage file for {file_name}")
+            await file_processing_service.delete_old_storage_file(old_file_url)
         
-        conn = await asyncpg.connect(
-            host=NEON_DB_HOST,
-            port=int(NEON_DB_PORT),
-            user=NEON_DB_USER,
-            password=NEON_DB_PASSWORD,
-            database=NEON_DB_NAME,
-            ssl='require'
+        # Delete old Neon records if they exist
+        if old_neon_ids and len(old_neon_ids) > 0:
+            logger.info(f"Deleting {len(old_neon_ids)} old Neon records for {file_name}")
+            await file_processing_service.delete_neon_records(old_neon_ids, file_name, user_id)
+        
+        # Create/update tracking record in firm_users_knowledge_base (Supabase)
+        # This will handle the upsert logic
+        tracking_result = await file_processing_service.create_processing_record(
+            firm_user_id=user_id,
+            file_name=file_name,
+            file_url=file_url,
+            agent_id=agent_id,
+            agent_name=agent_name,
+            source='agent_settings'
         )
         
-        query = """
-            INSERT INTO user_vector_knowledge_base
-            (user_id, agent_id, document, category, source, file_name, file_url, created_at, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-            RETURNING id
-        """
+        if not tracking_result["success"]:
+            raise HTTPException(status_code=500, detail=f"Failed to create tracking record: {tracking_result.get('error')}")
         
-        created_at = datetime.utcnow()
+        record_id = tracking_result["id"]
+        logger.info(f"Created/updated tracking record: {record_id}")
         
-        result = await conn.fetchrow(
-            query,
-            user_id,
-            agent_id,
-            f"File uploaded: {file_name} (processing...)",  # Placeholder until extraction
-            'documents',
-            'file_upload',
-            file_name,
-            file_url,
-            created_at,
-            created_at
-        )
-        
-        file_id = str(result['id'])
-        logger.info(f"Created Neon knowledge base record: {file_id}")
-        
-        # Start background text extraction that will update the Neon record
+        # Start background text extraction that will create Neon records
         background_tasks.add_task(
-            extract_and_update_neon_record,
-            file_id,
+            extract_and_update_neon_record_v2,
+            record_id,
             file_url,
             file_name,
             user_id,
@@ -7371,12 +7376,12 @@ async def save_file_knowledge(
         )
         
         # Initialize file status for SSE streaming
-        update_file_status(file_id, "uploading", "File uploaded, starting processing...", 10)
+        update_file_status(record_id, "uploading", "File uploaded, starting processing...", 10)
         
         return {
             "success": True,
             "message": "File uploaded to knowledge base successfully",
-            "file_id": file_id,
+            "id": record_id,
             "file_url": file_url,
             "processing_status": "pending"
         }
@@ -7494,13 +7499,16 @@ async def save_content_to_knowledge_base(
     file_name: str,
     file_url: str,
     chunk_size: int = 4000,
-    chunk_overlap: int = 400
+    chunk_overlap: int = 400,
+    agent_name: str = None
 ) -> bool:
     """
     Save content to user_vector_knowledge_base with chunking and embeddings.
+    Also creates a tracking record in firm_users_knowledge_base.
     
     Used by:
     - Website analysis endpoint
+    - Agent Settings file uploads
     - Can be reused for other content types
     
     Args:
@@ -7512,6 +7520,7 @@ async def save_content_to_knowledge_base(
         file_url: URL or identifier for the content
         chunk_size: Size of each chunk (default 4000)
         chunk_overlap: Overlap between chunks (default 400)
+        agent_name: Agent name for tracking record
     
     Returns:
         True if saved successfully, False otherwise
@@ -7553,6 +7562,7 @@ async def save_content_to_knowledge_base(
         
         total_chunks = len(chunks)
         created_at = datetime.utcnow()
+        neon_record_ids = []
         
         for i, chunk in enumerate(chunks, start=1):
             if not chunk.strip():
@@ -7569,8 +7579,9 @@ async def save_content_to_knowledge_base(
                     INSERT INTO user_vector_knowledge_base
                     (user_id, agent_id, document, embedding, category, source, file_name, file_url, created_at, updated_at)
                     VALUES ($1, $2, $3, $4::vector, $5, $6, $7, $8, $9, $10)
+                    RETURNING id
                 """
-                await conn.execute(
+                result = await conn.fetchrow(
                     insert_query,
                     user_id,
                     agent_id,
@@ -7583,13 +7594,16 @@ async def save_content_to_knowledge_base(
                     created_at,
                     created_at
                 )
+                if result:
+                    neon_record_ids.append(str(result['id']))
             else:
                 insert_query = """
                     INSERT INTO user_vector_knowledge_base
                     (user_id, agent_id, document, category, source, file_name, file_url, created_at, updated_at)
                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                    RETURNING id
                 """
-                await conn.execute(
+                result = await conn.fetchrow(
                     insert_query,
                     user_id,
                     agent_id,
@@ -7601,8 +7615,31 @@ async def save_content_to_knowledge_base(
                     created_at,
                     created_at
                 )
+                if result:
+                    neon_record_ids.append(str(result['id']))
             
             logger.info(f"Saved chunk {i}/{total_chunks} to KB for {file_name}")
+        
+        # Create tracking record in firm_users_knowledge_base
+        if neon_record_ids:
+            try:
+                result = await file_processing_service.create_processing_record(
+                    firm_user_id=user_id,
+                    file_name=file_name,
+                    file_url=file_url,
+                    agent_id=agent_id,
+                    agent_name=agent_name or agent_id,
+                    source=source
+                )
+                if result["success"]:
+                    # Update with neon_record_ids
+                    await file_processing_service.update_neon_record_ids(
+                        result["id"],
+                        neon_record_ids
+                    )
+                    logger.info(f"Created tracking record {result['id']} with {len(neon_record_ids)} neon IDs")
+            except Exception as track_error:
+                logger.warning(f"Failed to create tracking record (non-critical): {str(track_error)}")
         
         logger.info(f"✓ Successfully saved {total_chunks} chunks to KB for user {user_id}, agent {agent_id}")
         return True
@@ -7615,18 +7652,148 @@ async def save_content_to_knowledge_base(
             await conn.close()
 
 
-async def extract_and_update_neon_record(
-    file_id: str,
+async def extract_and_update_neon_record_v2(
+    record_id: str,
     file_url: str,
     file_name: str,
     user_id: str,
     agent_id: str
 ):
     """
+    Background task for Agent Settings uploads to:
+    1. Extract text from file
+    2. Generate embeddings using OpenRouter API
+    3. Create new records in user_vector_knowledge_base in Neon
+    4. Update tracking record in firm_users_knowledge_base with neon_record_ids
+    """
+    import asyncpg
+    
+    NEON_DB_HOST = os.getenv('NEON_DB_HOST')
+    NEON_DB_PORT = os.getenv('NEON_DB_PORT', '5432')
+    NEON_DB_USER = os.getenv('NEON_DB_USER')
+    NEON_DB_PASSWORD = os.getenv('NEON_DB_PASSWORD')
+    NEON_DB_NAME = os.getenv('NEON_DB_NAME', 'neondb')
+    
+    conn = None
+    try:
+        logger.info(f"Starting text extraction for record {record_id}: {file_name}")
+        update_file_status(record_id, "extracting", "Extracting text from file...", 20)
+        
+        # Step 1: Extract text
+        processor = get_background_processor()
+        if not processor:
+            raise Exception("Background processor not initialized")
+        
+        file_bytes = await processor.download_file(file_url)
+        if not file_bytes:
+            raise Exception("Empty file downloaded")
+        
+        extracted_text = await processor.extract_text(file_bytes, file_name)
+        if not extracted_text or not extracted_text.strip():
+            raise Exception("No text content found in file")
+        
+        chunks = processor.chunk_text(extracted_text, chunk_size=4000, chunk_overlap=400)
+        logger.info(f"Extracted {len(extracted_text)} chars, {len(chunks)} chunks from {file_name}")
+        update_file_status(record_id, "extracted", f"Extracted {len(chunks)} chunks from file", 40)
+        
+        # Step 2: Connect to Neon and create records
+        conn = await asyncpg.connect(
+            host=NEON_DB_HOST,
+            port=int(NEON_DB_PORT),
+            user=NEON_DB_USER,
+            password=NEON_DB_PASSWORD,
+            database=NEON_DB_NAME,
+            ssl='require'
+        )
+        
+        total_chunks = len(chunks)
+        neon_record_ids = []
+        update_file_status(record_id, "embedding", f"Generating embeddings for {total_chunks} chunks...", 50)
+        
+        for i, chunk in enumerate(chunks, start=1):
+            if not chunk.strip():
+                continue
+            
+            formatted_doc = f"File: {file_name} [Part {i}/{total_chunks}]\n\n{chunk}"
+            embedding = await generate_embedding_for_kb(chunk)
+            
+            if embedding:
+                insert_query = """
+                    INSERT INTO user_vector_knowledge_base
+                    (user_id, agent_id, document, embedding, category, source, file_name, file_url, created_at, updated_at)
+                    VALUES ($1, $2, $3, $4::vector, $5, $6, $7, $8, $9, $10)
+                    RETURNING id
+                """
+                result = await conn.fetchrow(
+                    insert_query,
+                    user_id,
+                    agent_id,
+                    formatted_doc,
+                    embedding,
+                    'documents',
+                    'agent_settings',
+                    file_name,
+                    file_url,
+                    datetime.utcnow(),
+                    datetime.utcnow()
+                )
+            else:
+                insert_query = """
+                    INSERT INTO user_vector_knowledge_base
+                    (user_id, agent_id, document, category, source, file_name, file_url, created_at, updated_at)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                    RETURNING id
+                """
+                result = await conn.fetchrow(
+                    insert_query,
+                    user_id,
+                    agent_id,
+                    formatted_doc,
+                    'documents',
+                    'agent_settings',
+                    file_name,
+                    file_url,
+                    datetime.utcnow(),
+                    datetime.utcnow()
+                )
+            
+            if result:
+                neon_record_ids.append(str(result['id']))
+            
+            logger.info(f"Inserted chunk {i}/{total_chunks} for record {record_id}")
+            progress = 50 + int((i / total_chunks) * 40)
+            update_file_status(record_id, "saving", f"Saving chunk {i}/{total_chunks}...", progress)
+        
+        # Step 3: Update tracking record with neon_record_ids
+        if neon_record_ids:
+            await file_processing_service.update_neon_record_ids(record_id, neon_record_ids)
+            logger.info(f"Updated tracking record {record_id} with {len(neon_record_ids)} neon IDs")
+        
+        logger.info(f"Successfully processed record {record_id}: {len(chunks)} chunks with embeddings")
+        update_file_status(record_id, "completed", f"Successfully processed {total_chunks} chunks", 100)
+        
+    except Exception as e:
+        logger.error(f"Background extraction failed for {record_id}: {str(e)}")
+        update_file_status(record_id, "failed", f"Processing failed: {str(e)}", 0)
+    finally:
+        if conn:
+            await conn.close()
+
+
+async def extract_and_update_neon_record(
+    file_id: str,
+    file_url: str,
+    file_name: str,
+    user_id: str,
+    agent_id: str,
+    record_id: str = None
+):
+    """
     Background task to:
     1. Extract text from file using /api/file/extract-text endpoint
     2. Generate embeddings using OpenRouter API
     3. Save text and embeddings to user_vector_knowledge_base in Neon
+    4. Update tracking record in firm_users_knowledge_base with neon_record_ids
     """
     import asyncpg
     import httpx
@@ -7775,6 +7942,24 @@ async def extract_and_update_neon_record(
         
         logger.info(f"Successfully processed file {file_id}: {len(chunks)} chunks with embeddings")
         update_file_status(file_id, "completed", f"Successfully processed {total_chunks} chunks", 100)
+        
+        # Update tracking record with neon_record_ids if we have a record_id
+        if record_id:
+            try:
+                # Get all neon record IDs for this file
+                neon_ids_query = """
+                    SELECT id FROM user_vector_knowledge_base 
+                    WHERE file_name = $1 AND user_id = $2 AND file_url = $3
+                    ORDER BY id
+                """
+                neon_rows = await conn.fetch(neon_ids_query, file_name, user_id, file_url)
+                neon_record_ids = [str(row['id']) for row in neon_rows]
+                
+                if neon_record_ids:
+                    await file_processing_service.update_neon_record_ids(record_id, neon_record_ids)
+                    logger.info(f"Updated tracking record {record_id} with {len(neon_record_ids)} neon IDs")
+            except Exception as track_error:
+                logger.warning(f"Failed to update tracking record with neon IDs: {str(track_error)}")
         
     except Exception as e:
         logger.error(f"Background extraction failed for {file_id}: {str(e)}")

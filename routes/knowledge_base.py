@@ -598,8 +598,8 @@ async def delete_file(file_id: str, file_url: Optional[str] = None):
         # 1. First, try to get file info from Supabase firm_users_knowledge_base
         try:
             supabase_result = supabase.table("firm_users_knowledge_base").select(
-                "file_id, file_url, firm_user_id, agent_id, neon_record_ids"
-            ).eq("file_id", file_id).execute()
+                "id, file_url, firm_user_id, agent_id, neon_record_ids"
+            ).eq("id", file_id).execute()
             
             if supabase_result.data and len(supabase_result.data) > 0:
                 record = supabase_result.data[0]
@@ -607,9 +607,10 @@ async def delete_file(file_id: str, file_url: Optional[str] = None):
                 user_id = record.get("firm_user_id")
                 agent_id = record.get("agent_id")
                 neon_record_ids = record.get("neon_record_ids", []) or []
+                logger.info(f"Found file {file_id} with neon_record_ids: {neon_record_ids}, file_url: {db_file_url}")
                 
                 # Delete from Supabase table
-                delete_result = supabase.table("firm_users_knowledge_base").delete().eq("file_id", file_id).execute()
+                delete_result = supabase.table("firm_users_knowledge_base").delete().eq("id", file_id).execute()
                 if delete_result.data:
                     supabase_deleted = True
                     logger.info(f"Deleted file {file_id} from firm_users_knowledge_base")
@@ -623,15 +624,25 @@ async def delete_file(file_id: str, file_url: Optional[str] = None):
         try:
             conn = await get_db_connection()
             
-            # If we have neon_record_ids from Supabase, delete by those IDs
+            # If we have neon_record_ids from Supabase, delete by those IDs (UUIDs stored as strings)
             if neon_record_ids and len(neon_record_ids) > 0:
-                # Convert string IDs to integers (they're stored as strings to avoid scientific notation)
-                int_ids = [int(id) for id in neon_record_ids]
-                delete_query = "DELETE FROM user_vector_knowledge_base WHERE id = ANY($1::int[])"
-                result = await conn.execute(delete_query, int_ids)
+                delete_query = "DELETE FROM user_vector_knowledge_base WHERE id = ANY($1::uuid[])"
+                result = await conn.execute(delete_query, neon_record_ids)
                 deleted_count = int(result.split()[-1])
                 neon_deleted = True
                 logger.info(f"Deleted {deleted_count} Neon records by IDs for file {file_id}")
+            
+            # Always try to delete by file_url as well (catches any orphaned chunks)
+            if storage_url:
+                try:
+                    delete_query = "DELETE FROM user_vector_knowledge_base WHERE file_url = $1"
+                    result = await conn.execute(delete_query, storage_url)
+                    deleted_count = int(result.split()[-1])
+                    if deleted_count > 0:
+                        neon_deleted = True
+                        logger.info(f"Deleted {deleted_count} Neon records by file_url: {storage_url}")
+                except Exception as e:
+                    logger.debug(f"Could not delete by file_url: {e}")
             
             # Also try to find by file_id (UUID) in case it's a Neon-only record
             if not neon_deleted:
