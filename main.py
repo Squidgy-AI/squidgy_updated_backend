@@ -6779,25 +6779,36 @@ async def process_file_from_url(
             logger.error(f"Failed to create processing record: {result['error']}")
             raise HTTPException(status_code=500, detail=f"Failed to create record: {result['error']}")
         
-        file_id = result["id"]
-        logger.info(f"Created processing record: {file_id}")
+        record_id = result["id"]
+        logger.info(f"Created processing record: {record_id}")
         
-        # Start background text extraction
-        processor = get_background_processor()
-        background_tasks.add_task(processor.process_file, file_id)
+        # Start background text extraction using the same function as agent settings
+        # This ensures consistent embedding and storage behavior
+        background_tasks.add_task(
+            extract_and_update_neon_record_v2,
+            record_id,
+            file_url,
+            file_name,
+            firm_user_id,
+            agent_id,
+            source  # Pass the source parameter (defaults to 'chat')
+        )
+        
+        # Initialize file status for SSE streaming
+        update_file_status(record_id, "uploading", "File uploaded, starting processing...", 10)
         
         # Return immediate success response
         return {
             "success": True,
             "message": "Thank you! Your file has been received and is being processed.",
             "data": {
-                "file_id": file_id,
+                "file_id": record_id,
                 "firm_user_id": firm_user_id,
                 "file_name": file_name,
                 "agent_id": agent_id,
                 "agent_name": agent_name,
                 "status": "processing_started",
-                "processing_url": f"/api/file/status/{file_id}"
+                "processing_url": f"/api/file/status/{record_id}"
             }
         }
         
@@ -6927,14 +6938,14 @@ async def get_file_processing_status(file_id: str):
         return {
             "success": True,
             "data": {
-                "file_id": data["file_id"],
+                "id": data["id"],
                 "file_name": data["file_name"],
                 "agent_id": data["agent_id"],
-                "agent_name": data["agent_name"],
+                "agent_name": data.get("agent_name"),
                 "processing_status": status,  # Frontend expects 'processing_status' not 'status'
                 "neon_record_ids": neon_ids,
-                "created_at": data["created_at"],
-                "updated_at": data["updated_at"]
+                "created_at": data.get("created_at"),
+                "updated_at": data.get("updated_at")
             }
         }
         
@@ -7208,14 +7219,11 @@ async def save_text_knowledge(
             "firm_user_id", firm_user_id
         ).eq("file_name", "User Input").execute()
         
-        # Generate unique file_id for text entry
-        file_id = f"text_{uuid.uuid4().hex[:12]}"
-        
         # If record exists, update it; otherwise insert new record
         if existing_response.data and len(existing_response.data) > 0:
             # UPDATE existing "User Input" record
+            record_id = existing_response.data[0]["id"]
             result = supabase.table("firm_users_knowledge_base").update({
-                "file_id": file_id,
                 "agent_id": agent_id,
                 "agent_name": agent_name,
                 "extracted_text": text_content.strip(),
@@ -7223,12 +7231,11 @@ async def save_text_knowledge(
                 "updated_at": datetime.now(timezone.utc).isoformat()
             }).eq("firm_user_id", firm_user_id).eq("file_name", "User Input").execute()
             
-            logger.info(f"Updated existing text knowledge: {file_id}")
+            logger.info(f"Updated existing text knowledge: {record_id}")
         else:
             # INSERT new "User Input" record
             result = supabase.table("firm_users_knowledge_base").insert({
                 "firm_user_id": firm_user_id,
-                "file_id": file_id,
                 "file_name": "User Input",
                 "file_url": "",  # Empty for text input
                 "agent_id": agent_id,
@@ -7237,7 +7244,8 @@ async def save_text_knowledge(
                 "processing_status": "completed"
             }).execute()
             
-            logger.info(f"Inserted new text knowledge: {file_id}")
+            record_id = result.data[0]["id"] if result.data else None
+            logger.info(f"Inserted new text knowledge: {record_id}")
         
         if not result.data:
             raise HTTPException(status_code=500, detail="Failed to save text knowledge")
@@ -7245,7 +7253,7 @@ async def save_text_knowledge(
         return {
             "success": True,
             "message": "Text knowledge saved successfully",
-            "file_id": file_id,
+            "id": record_id,
             "processing_status": "completed"
         }
         
@@ -7657,10 +7665,11 @@ async def extract_and_update_neon_record_v2(
     file_url: str,
     file_name: str,
     user_id: str,
-    agent_id: str
+    agent_id: str,
+    source: str = "agent_settings"
 ):
     """
-    Background task for Agent Settings uploads to:
+    Background task for file uploads to:
     1. Extract text from file
     2. Generate embeddings using OpenRouter API
     3. Create new records in user_vector_knowledge_base in Neon
@@ -7731,7 +7740,7 @@ async def extract_and_update_neon_record_v2(
                     formatted_doc,
                     embedding,
                     'documents',
-                    'agent_settings',
+                    source,
                     file_name,
                     file_url,
                     datetime.utcnow(),
@@ -7750,7 +7759,7 @@ async def extract_and_update_neon_record_v2(
                     agent_id,
                     formatted_doc,
                     'documents',
-                    'agent_settings',
+                    source,
                     file_name,
                     file_url,
                     datetime.utcnow(),
