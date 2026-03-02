@@ -447,42 +447,167 @@ class BackgroundTextProcessor:
             except Exception:
                 raise Exception(f"Unsupported file type: {file_ext}")
     
-    async def update_processing_status(
-        self, 
-        file_id: str, 
-        status: str, 
-        extracted_text: Optional[str] = None,
-        error_message: Optional[str] = None
-    ):
-        """Update file processing status in database"""
+    async def update_neon_record_ids(self, file_id: str, neon_record_ids: list):
+        """Update the neon_record_ids in Supabase after saving to Neon"""
         try:
-            update_data = {
-                "processing_status": status,
+            # Convert to strings to avoid scientific notation for large integers in JSON
+            # Neon IDs are bigint/serial which can be very large
+            serializable_ids = [str(id) for id in neon_record_ids]
+            
+            result = self.supabase.table("firm_users_knowledge_base").update({
+                "neon_record_ids": serializable_ids,
                 "updated_at": "now()"
-            }
-            
-            if extracted_text is not None:
-                update_data["extracted_text"] = extracted_text
-            
-            if error_message is not None:
-                update_data["error_message"] = error_message
-            
-            result = self.supabase.table("firm_users_knowledge_base").update(
-                update_data
-            ).eq("file_id", file_id).execute()
+            }).eq("file_id", file_id).execute()
             
             if not result.data:
-                logger.error(f"Failed to update status for file_id: {file_id}")
+                logger.error(f"Failed to update neon_record_ids for file_id: {file_id}")
+            else:
+                logger.info(f"Updated neon_record_ids for {file_id}: {len(serializable_ids)} records")
                 
         except Exception as e:
             logger.error(f"Database update error for {file_id}: {e}")
     
-    async def process_file(self, file_id: str):
-        """Main processing function for a file"""
+    async def generate_embedding(self, text: str) -> Optional[str]:
+        """
+        Generate embedding using OpenRouter API.
+        Returns formatted string for PostgreSQL vector: [0.1,0.2,...]
+        
+        Note: Uses same format as generate_embedding_for_kb() in main.py
+        """
         try:
-            # Get file record from database
+            OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+            if not OPENROUTER_API_KEY:
+                logger.error("OPENROUTER_API_KEY not configured")
+                return None
+            
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.post(
+                    "https://openrouter.ai/api/v1/embeddings",
+                    headers={
+                        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "model": "openai/text-embedding-3-small",
+                        "input": text[:8000]
+                    }
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    embedding = data.get("data", [{}])[0].get("embedding", [])
+                    if embedding and len(embedding) > 0:
+                        vector_str = '[' + ','.join(str(x) for x in embedding) + ']'
+                        return vector_str
+                else:
+                    logger.error(f"Embedding API error: {response.status_code}")
+                    
+        except Exception as e:
+            logger.error(f"Error generating embedding: {str(e)}")
+        
+        return None
+    
+    async def save_chunks_to_neon(
+        self,
+        user_id: str,
+        agent_id: str,
+        file_name: str,
+        file_url: str,
+        extracted_text: str,
+        source: str = "chat",
+        chunk_size: int = 4000,
+        chunk_overlap: int = 400
+    ) -> List[int]:
+        """
+        Save extracted text chunks to Neon DB with embeddings.
+        Returns list of Neon record IDs.
+        """
+        import asyncpg
+        from datetime import datetime
+        
+        NEON_DB_HOST = os.getenv("NEON_DB_HOST")
+        NEON_DB_USER = os.getenv("NEON_DB_USER")
+        NEON_DB_PASSWORD = os.getenv("NEON_DB_PASSWORD")
+        NEON_DB_NAME = os.getenv("NEON_DB_NAME", "neondb")
+        
+        if not all([NEON_DB_HOST, NEON_DB_USER, NEON_DB_PASSWORD]):
+            logger.error("Neon DB credentials not configured")
+            return []
+        
+        # Chunk the text
+        chunks = self.chunk_text(extracted_text, chunk_size, chunk_overlap)
+        if not chunks:
+            logger.warning(f"No chunks generated for {file_name}")
+            return []
+        
+        logger.info(f"Generated {len(chunks)} chunks for {file_name}")
+        
+        neon_record_ids = []
+        
+        try:
+            conn = await asyncpg.connect(
+                host=NEON_DB_HOST,
+                user=NEON_DB_USER,
+                password=NEON_DB_PASSWORD,
+                database=NEON_DB_NAME,
+                ssl="require"
+            )
+            
+            try:
+                created_at = datetime.utcnow()
+                
+                for i, chunk in enumerate(chunks, start=1):
+                    # Format document with metadata
+                    formatted_doc = f"[Source: {file_name} | Chunk {i}/{len(chunks)}]\n\n{chunk}"
+                    
+                    # Generate embedding
+                    embedding = await self.generate_embedding(chunk)
+                    
+                    if embedding:
+                        # Insert into Neon DB
+                        insert_query = """
+                            INSERT INTO user_vector_knowledge_base
+                            (user_id, agent_id, document, embedding, category, source, file_name, file_url, created_at, updated_at)
+                            VALUES ($1, $2, $3, $4::vector, $5, $6, $7, $8, $9, $10)
+                            RETURNING id
+                        """
+                        
+                        result = await conn.fetchrow(
+                            insert_query,
+                            user_id,
+                            agent_id,
+                            formatted_doc,
+                            embedding,
+                            'documents',
+                            source,
+                            file_name,
+                            file_url,
+                            created_at,
+                            created_at
+                        )
+                        
+                        if result:
+                            neon_record_ids.append(result['id'])
+                            logger.debug(f"Saved chunk {i}/{len(chunks)} to Neon (id: {result['id']})")
+                    else:
+                        logger.warning(f"Failed to generate embedding for chunk {i}/{len(chunks)}")
+                
+                logger.info(f"Saved {len(neon_record_ids)} chunks to Neon for {file_name}")
+                
+            finally:
+                await conn.close()
+                
+        except Exception as e:
+            logger.error(f"Error saving to Neon: {str(e)}")
+        
+        return neon_record_ids
+    
+    async def process_file(self, file_id: str):
+        """Main processing function for a file - extracts text and saves to Neon"""
+        try:
+            # Get file record from Supabase firm_users_knowledge_base
             result = self.supabase.table("firm_users_knowledge_base").select(
-                "file_id, file_name, file_url, processing_status, firm_user_id, agent_id"
+                "file_id, file_name, file_url, firm_user_id, agent_id, source, neon_record_ids"
             ).eq("file_id", file_id).execute()
 
             if not result.data:
@@ -490,14 +615,12 @@ class BackgroundTextProcessor:
                 return
 
             file_record = result.data[0]
-
-            # Skip if already processed
-            if file_record["processing_status"] in ["completed", "failed"]:
-                logger.info(f"File {file_id} already processed with status: {file_record['processing_status']}")
+            
+            # Skip if already has Neon records (already processed)
+            existing_neon_ids = file_record.get("neon_record_ids", [])
+            if existing_neon_ids and len(existing_neon_ids) > 0:
+                logger.info(f"File {file_id} already has {len(existing_neon_ids)} Neon records, skipping")
                 return
-
-            # Update status to processing
-            await self.update_processing_status(file_id, "processing")
 
             # Download file
             logger.info(f"Downloading file: {file_record['file_url']}")
@@ -508,27 +631,28 @@ class BackgroundTextProcessor:
             extracted_text = await self.extract_text(file_bytes, file_record["file_name"])
 
             if not extracted_text.strip():
-                raise Exception("No text content found in file")
+                logger.error(f"No text content found in file {file_id}")
+                return
 
-            # Update with success
-            await self.update_processing_status(
-                file_id,
-                "completed",
-                extracted_text=extracted_text
+            # Save chunks to Neon and get record IDs
+            neon_record_ids = await self.save_chunks_to_neon(
+                user_id=file_record["firm_user_id"],
+                agent_id=file_record["agent_id"],
+                file_name=file_record["file_name"],
+                file_url=file_record["file_url"],
+                extracted_text=extracted_text,
+                source=file_record.get("source", "chat")
             )
 
-            logger.info(f"Successfully processed file {file_id}")
+            # Update Supabase with Neon record IDs
+            if neon_record_ids:
+                await self.update_neon_record_ids(file_id, neon_record_ids)
+                logger.info(f"Successfully processed file {file_id} - {len(neon_record_ids)} chunks saved")
+            else:
+                logger.error(f"No chunks saved to Neon for file {file_id}")
 
         except Exception as e:
-            error_msg = str(e)
-            logger.error(f"Processing failed for {file_id}: {error_msg}")
-
-            # Update with failure
-            await self.update_processing_status(
-                file_id,
-                "failed",
-                error_message=error_msg
-            )
+            logger.error(f"Processing failed for {file_id}: {str(e)}")
 
 
 # Global processor instance

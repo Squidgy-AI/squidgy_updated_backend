@@ -16,13 +16,13 @@ When inserting records, the system uses ON CONFLICT handling:
 ```sql
 INSERT INTO firm_users_knowledge_base (
   id, firm_user_id, file_id, file_name, file_url,
-  agent_id, agent_name, extracted_text,
-  processing_status, error_message, created_at, updated_at
+  agent_id, agent_name, processing_status, error_message,
+  neon_record_ids, source, created_at, updated_at
 )
 VALUES (
   gen_random_uuid(), :firm_user_id, :file_id, :file_name, :file_url,
-  :agent_id, :agent_name, :extracted_text,
-  :processing_status, :error_message, NOW(), NOW()
+  :agent_id, :agent_name, :processing_status, :error_message,
+  :neon_record_ids, :source, NOW(), NOW()
 )
 ON CONFLICT (firm_user_id, file_name)
 DO UPDATE SET
@@ -30,9 +30,10 @@ DO UPDATE SET
   file_url = EXCLUDED.file_url,
   agent_id = EXCLUDED.agent_id,
   agent_name = EXCLUDED.agent_name,
-  extracted_text = EXCLUDED.extracted_text,
   processing_status = EXCLUDED.processing_status,
   error_message = EXCLUDED.error_message,
+  neon_record_ids = EXCLUDED.neon_record_ids,
+  source = EXCLUDED.source,
   updated_at = NOW();
 ```
 
@@ -47,11 +48,14 @@ DO UPDATE SET
 | `file_url` | String | Supabase storage public URL (empty for text input) |
 | `agent_id` | String | Agent ID from YAML config |
 | `agent_name` | String | Agent name from YAML config |
-| `extracted_text` | Text | Extracted text content from file or direct text input |
 | `processing_status` | String | Status: `pending`, `processing`, `completed`, `failed` |
 | `error_message` | String | Error message if processing failed |
+| `neon_record_ids` | JSONB | Array of Neon DB record IDs for this file's chunks |
+| `source` | String | Upload source: `agent_settings` or `chat` |
 | `created_at` | Timestamp | Record creation timestamp |
 | `updated_at` | Timestamp | Last update timestamp |
+
+**Note**: `extracted_text` column has been REMOVED. All extracted text is stored in Neon `user_vector_knowledge_base` table only. The `neon_record_ids` column links to those records.
 
 ## Code Implementation
 
@@ -85,8 +89,9 @@ When a user uploads a file with the same name twice:
 - ✅ New `file_id` is generated
 - ✅ New `file_url` points to new storage location
 - ✅ Old file in Supabase storage is **automatically deleted** (no orphans!)
+- ✅ Old Neon records are **deleted** using stored `neon_record_ids`
 - ✅ `processing_status` resets to `pending`
-- ✅ `extracted_text` is cleared and re-extracted
+- ✅ New chunks are extracted and saved to Neon with new IDs
 
 ### 2. Text Input Updates
 When a user saves text knowledge multiple times:
@@ -97,15 +102,19 @@ When a user saves text knowledge multiple times:
 ### 3. Frontend Upload Flow
 ```
 1. User selects file (e.g., "document.pdf")
-2. Frontend uploads to Supabase storage as: "{userId}_{timestamp}_document.pdf"
-3. Frontend calls /api/file/process with original filename: "document.pdf"
-4. Backend creates/updates record with file_name: "document.pdf"
-5. If user uploads "document.pdf" again:
-   - Backend checks for existing record with same (firm_user_id, file_name)
-   - Old storage file is automatically deleted: "{userId}_{oldTimestamp}_document.pdf"
-   - New storage file uploaded: "{userId}_{newTimestamp}_document.pdf"
-   - Database record updated with new file_url and file_id
-   - ✅ No orphaned files!
+2. Frontend checks for duplicates via GET /api/files/user/{userId}
+3. If duplicate found → Show confirmation dialog → User confirms replace
+4. Frontend uploads to Supabase storage as: "{userId}_{timestamp}_document.pdf"
+5. Frontend calls /api/file/process with original filename: "document.pdf"
+6. Backend creates/updates record with file_name: "document.pdf"
+7. If replacing existing file:
+   - Backend deletes old storage file using stored file_url
+   - Backend deletes old Neon records using stored neon_record_ids
+   - Database record updated with new file_url, file_id, empty neon_record_ids
+8. Background task extracts text, chunks, generates embeddings
+9. Chunks saved to Neon, IDs collected
+10. Supabase record updated with neon_record_ids array
+11. processing_status set to "completed"
 ```
 
 ## Orphaned Storage Files - RESOLVED ✅

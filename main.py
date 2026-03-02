@@ -6740,7 +6740,8 @@ async def process_file_from_url(
     file_name: str = Form(...),
     file_url: str = Form(...),
     agent_id: str = Form(...),
-    agent_name: str = Form(...)
+    agent_name: str = Form(...),
+    source: str = Form("chat")
 ):
     """
     Accept file storage URL from frontend and process in background
@@ -6751,12 +6752,13 @@ async def process_file_from_url(
     - file_url: Supabase storage URL (already uploaded by frontend)
     - agent_id: Agent ID from YAML config
     - agent_name: Agent name from YAML config
+    - source: Upload source ('chat' or 'agent_settings')
     
     Returns:
     - Immediate "thanks" response with file_id for tracking
     """
     try:
-        logger.info(f"File processing request from user {firm_user_id}: {file_name}")
+        logger.info(f"File processing request from user {firm_user_id}: {file_name} (source: {source})")
         
         # Validate required fields
         if not all([firm_user_id, file_name, file_url, agent_id, agent_name]):
@@ -6768,7 +6770,8 @@ async def process_file_from_url(
             file_name=file_name,
             file_url=file_url,
             agent_id=agent_id,
-            agent_name=agent_name
+            agent_name=agent_name,
+            source=source
         )
         
         if not result["success"]:
@@ -6915,6 +6918,10 @@ async def get_file_processing_status(file_id: str):
         
         data = result["data"]
         
+        # Derive status from neon_record_ids (processing_status column was removed)
+        neon_ids = data.get("neon_record_ids", []) or []
+        status = "completed" if len(neon_ids) > 0 else "processing"
+        
         return {
             "success": True,
             "data": {
@@ -6922,9 +6929,8 @@ async def get_file_processing_status(file_id: str):
                 "file_name": data["file_name"],
                 "agent_id": data["agent_id"],
                 "agent_name": data["agent_name"],
-                "status": data["processing_status"],
-                "extracted_text": data.get("extracted_text"),
-                "error_message": data.get("error_message"),
+                "processing_status": status,  # Frontend expects 'processing_status' not 'status'
+                "neon_record_ids": neon_ids,
                 "created_at": data["created_at"],
                 "updated_at": data["updated_at"]
             }
@@ -6936,9 +6942,90 @@ async def get_file_processing_status(file_id: str):
         logger.error(f"Error getting file status: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/file/content/{file_id}")
+async def get_file_extracted_content(file_id: str):
+    """Get the extracted text content for a file from Neon"""
+    try:
+        # First get the file record to get neon_record_ids
+        result = await file_processing_service.get_processing_record(file_id)
+        
+        if not result["success"]:
+            raise HTTPException(status_code=404, detail="File not found")
+        
+        data = result["data"]
+        neon_ids = data.get("neon_record_ids", []) or []
+        
+        if not neon_ids:
+            return {
+                "success": True,
+                "data": {
+                    "file_id": file_id,
+                    "file_name": data["file_name"],
+                    "extracted_text": "",
+                    "chunk_count": 0
+                }
+            }
+        
+        # Fetch the extracted text from Neon
+        import asyncpg
+        
+        NEON_DB_HOST = os.getenv('NEON_DB_HOST')
+        NEON_DB_USER = os.getenv('NEON_DB_USER')
+        NEON_DB_PASSWORD = os.getenv('NEON_DB_PASSWORD')
+        NEON_DB_NAME = os.getenv('NEON_DB_NAME', 'neondb')
+        
+        conn = await asyncpg.connect(
+            host=NEON_DB_HOST,
+            user=NEON_DB_USER,
+            password=NEON_DB_PASSWORD,
+            database=NEON_DB_NAME,
+            ssl="require"
+        )
+        
+        try:
+            # Check if IDs are integers or UUIDs
+            # Old records may have UUID-style IDs, new records have integer IDs stored as strings
+            file_name = data["file_name"]
+            
+            try:
+                # Try to convert to integers (new format)
+                int_ids = [int(id) for id in neon_ids]
+                rows = await conn.fetch(
+                    "SELECT document FROM user_vector_knowledge_base WHERE id = ANY($1::int[]) ORDER BY id",
+                    int_ids
+                )
+            except ValueError:
+                # IDs are UUIDs - query by file_name instead
+                logger.info(f"neon_record_ids are UUIDs, querying by file_name: {file_name}")
+                rows = await conn.fetch(
+                    "SELECT document FROM user_vector_knowledge_base WHERE file_name = $1 ORDER BY id",
+                    file_name
+                )
+            
+            # Combine all chunks into one text
+            extracted_text = "\n\n".join([row['document'] for row in rows])
+            
+            return {
+                "success": True,
+                "data": {
+                    "file_id": file_id,
+                    "file_name": data["file_name"],
+                    "extracted_text": extracted_text,
+                    "chunk_count": len(rows)
+                }
+            }
+        finally:
+            await conn.close()
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting file content: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/api/files/user/{firm_user_id}")
 async def get_user_files(firm_user_id: str, agent_id: Optional[str] = None):
-    """Get all processed files for a user"""
+    """Get all processed files for a user from Supabase firm_users_knowledge_base"""
     try:
         result = await file_processing_service.get_user_files(firm_user_id, agent_id)
         
@@ -6950,6 +7037,134 @@ async def get_user_files(firm_user_id: str, agent_id: Optional[str] = None):
         
     except Exception as e:
         logger.error(f"Error getting user files: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/files/unified/{firm_user_id}/{agent_id}")
+async def get_unified_user_files(firm_user_id: str, agent_id: str):
+    """
+    Get all files for a user from BOTH Supabase (firm_users_knowledge_base) 
+    and Neon (user_vector_knowledge_base) - unified view for Agent Settings
+    """
+    import asyncpg
+    
+    try:
+        all_files = []
+        
+        # Helper function to determine file type from filename
+        def get_file_type(file_name: str) -> str:
+            if not file_name:
+                return "document"
+            ext = file_name.lower().split('.')[-1] if '.' in file_name else ""
+            image_extensions = ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'svg', 'ico', 'heic', 'heif']
+            return "image" if ext in image_extensions else "document"
+        
+        # 1. Get ALL files from Supabase firm_users_knowledge_base (Chat uploads)
+        # Note: We fetch ALL user files regardless of agent_id so users can see all their uploads
+        try:
+            supabase_result = await file_processing_service.get_user_files(firm_user_id, None)  # No agent_id filter
+            supabase_files = supabase_result.get("data", [])
+            
+            for file in supabase_files:
+                file_name = file.get("file_name", "")
+                neon_ids = file.get("neon_record_ids", []) or []
+                has_neon_records = len(neon_ids) > 0
+                file_type = get_file_type(file_name)
+                
+                # Images with extracted content (neon records) should be treated as documents
+                if file_type == "image" and has_neon_records:
+                    file_type = "document"
+                
+                all_files.append({
+                    "file_id": file.get("file_id"),
+                    "file_name": file_name,
+                    "file_url": file.get("file_url"),
+                    "created_at": file.get("created_at"),
+                    "source": file.get("source", "chat"),
+                    "processing_status": "completed",
+                    "file_type": file_type,
+                    "has_neon_records": has_neon_records
+                })
+        except Exception as e:
+            logger.warning(f"Error fetching from Supabase: {str(e)}")
+        
+        # 2. Get files from Neon user_vector_knowledge_base (Agent Settings uploads)
+        try:
+            NEON_DB_HOST = os.getenv('NEON_DB_HOST')
+            NEON_DB_PORT = os.getenv('NEON_DB_PORT', '5432')
+            NEON_DB_USER = os.getenv('NEON_DB_USER')
+            NEON_DB_PASSWORD = os.getenv('NEON_DB_PASSWORD')
+            NEON_DB_NAME = os.getenv('NEON_DB_NAME', 'neondb')
+            
+            if all([NEON_DB_HOST, NEON_DB_USER, NEON_DB_PASSWORD]):
+                conn = await asyncpg.connect(
+                    host=NEON_DB_HOST,
+                    port=int(NEON_DB_PORT),
+                    user=NEON_DB_USER,
+                    password=NEON_DB_PASSWORD,
+                    database=NEON_DB_NAME,
+                    ssl='require'
+                )
+                
+                try:
+                    # Query for ALL user files - deduplicate by file_url
+                    # No agent_id filter so users can see all their uploads
+                    query = """
+                        SELECT
+                            (MIN(id::text))::uuid as file_id,
+                            file_name,
+                            file_url,
+                            MAX(created_at) as created_at,
+                            source
+                        FROM user_vector_knowledge_base
+                        WHERE user_id = $1
+                          AND category = 'documents'
+                          AND file_name IS NOT NULL
+                          AND file_url IS NOT NULL
+                        GROUP BY file_name, file_url, source
+                        ORDER BY MAX(created_at) DESC
+                    """
+                    
+                    rows = await conn.fetch(query, firm_user_id)
+                    
+                    # Add Neon files, avoiding duplicates already in Supabase
+                    existing_urls = {f["file_url"] for f in all_files}
+                    
+                    for row in rows:
+                        if row['file_url'] not in existing_urls:
+                            file_name = row['file_name'] or ""
+                            file_type = get_file_type(file_name)
+                            # Neon records always have extracted content, so images become documents
+                            if file_type == "image":
+                                file_type = "document"
+                            
+                            all_files.append({
+                                'file_id': str(row['file_id']),
+                                'file_name': file_name,
+                                'file_url': row['file_url'],
+                                'created_at': row['created_at'].isoformat() if row['created_at'] else None,
+                                'source': row.get('source', 'agent_settings'),
+                                'processing_status': 'completed',
+                                'file_type': file_type,
+                                'has_neon_records': True  # Always true for Neon-sourced files
+                            })
+                finally:
+                    await conn.close()
+        except Exception as e:
+            logger.warning(f"Error fetching from Neon: {str(e)}")
+        
+        # Sort by created_at descending
+        all_files.sort(key=lambda x: x.get('created_at', ''), reverse=True)
+        
+        logger.info(f"Fetched {len(all_files)} unified files for user {firm_user_id}, agent {agent_id}")
+        
+        return {
+            "success": True,
+            "files": all_files,
+            "count": len(all_files)
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting unified user files: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # ============================================================================
@@ -6986,27 +7201,44 @@ async def save_text_knowledge(
         if not all([firm_user_id, agent_id, agent_name, text_content.strip()]):
             raise HTTPException(status_code=400, detail="All fields are required and text cannot be empty")
         
+        # Check if record already exists for this user with "User Input" filename
+        existing_response = supabase.table("firm_users_knowledge_base").select("*").eq(
+            "firm_user_id", firm_user_id
+        ).eq("file_name", "User Input").execute()
+        
         # Generate unique file_id for text entry
         file_id = f"text_{uuid.uuid4().hex[:12]}"
         
-        # Use upsert to handle ON CONFLICT (firm_user_id, file_name)
-        # Note: "User Input" is a static file_name, so this will update the same record
-        # for multiple text inputs from the same user
-        result = supabase.table("firm_users_knowledge_base").upsert({
-            "firm_user_id": firm_user_id,
-            "file_id": file_id,
-            "file_name": "User Input",
-            "file_url": "",  # Empty for text input
-            "agent_id": agent_id,
-            "agent_name": agent_name,
-            "extracted_text": text_content.strip(),
-            "processing_status": "completed"
-        }, on_conflict="firm_user_id,file_name").execute()
+        # If record exists, update it; otherwise insert new record
+        if existing_response.data and len(existing_response.data) > 0:
+            # UPDATE existing "User Input" record
+            result = supabase.table("firm_users_knowledge_base").update({
+                "file_id": file_id,
+                "agent_id": agent_id,
+                "agent_name": agent_name,
+                "extracted_text": text_content.strip(),
+                "processing_status": "completed",
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            }).eq("firm_user_id", firm_user_id).eq("file_name", "User Input").execute()
+            
+            logger.info(f"Updated existing text knowledge: {file_id}")
+        else:
+            # INSERT new "User Input" record
+            result = supabase.table("firm_users_knowledge_base").insert({
+                "firm_user_id": firm_user_id,
+                "file_id": file_id,
+                "file_name": "User Input",
+                "file_url": "",  # Empty for text input
+                "agent_id": agent_id,
+                "agent_name": agent_name,
+                "extracted_text": text_content.strip(),
+                "processing_status": "completed"
+            }).execute()
+            
+            logger.info(f"Inserted new text knowledge: {file_id}")
         
         if not result.data:
             raise HTTPException(status_code=500, detail="Failed to save text knowledge")
-        
-        logger.info(f"Text knowledge saved successfully: {file_id}")
         
         return {
             "success": True,

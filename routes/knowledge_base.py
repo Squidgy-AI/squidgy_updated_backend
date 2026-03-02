@@ -570,10 +570,13 @@ async def upload_file(
 @router.delete("/file/{file_id}", response_model=DeleteResponse)
 async def delete_file(file_id: str, file_url: Optional[str] = None):
     """
-    Delete file and all its chunks from Neon database and Supabase storage
+    Delete file from ALL locations:
+    1. Supabase firm_users_knowledge_base table
+    2. Neon user_vector_knowledge_base table (all chunks)
+    3. Supabase storage (newsletter or agentkbs bucket)
 
     Args:
-        file_id: The UUID of the file record
+        file_id: The UUID/ID of the file record
         file_url: Optional file URL for storage deletion (used if DB record already deleted)
 
     Returns:
@@ -583,84 +586,164 @@ async def delete_file(file_id: str, file_url: Optional[str] = None):
     db_file_url = None
     user_id = None
     agent_id = None
+    neon_record_ids = []
+    supabase_deleted = False
+    neon_deleted = False
+    storage_deleted = False
     
     try:
-        conn = await get_db_connection()
-
-        # Get file_url to delete all chunks with same file_url
-        file_query = """
-            SELECT file_url, user_id, agent_id
-            FROM user_vector_knowledge_base
-            WHERE id = $1
-        """
-
-        file_result = await conn.fetchrow(file_query, file_id)
-
-        if file_result:
-            db_file_url = file_result['file_url']
-            user_id = file_result['user_id']
-            agent_id = file_result['agent_id']
+        # Initialize Supabase client
+        supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
         
-        # Use provided file_url if DB record not found
+        # 1. First, try to get file info from Supabase firm_users_knowledge_base
+        try:
+            supabase_result = supabase.table("firm_users_knowledge_base").select(
+                "file_id, file_url, firm_user_id, agent_id, neon_record_ids"
+            ).eq("file_id", file_id).execute()
+            
+            if supabase_result.data and len(supabase_result.data) > 0:
+                record = supabase_result.data[0]
+                db_file_url = record.get("file_url")
+                user_id = record.get("firm_user_id")
+                agent_id = record.get("agent_id")
+                neon_record_ids = record.get("neon_record_ids", []) or []
+                
+                # Delete from Supabase table
+                delete_result = supabase.table("firm_users_knowledge_base").delete().eq("file_id", file_id).execute()
+                if delete_result.data:
+                    supabase_deleted = True
+                    logger.info(f"Deleted file {file_id} from firm_users_knowledge_base")
+        except Exception as e:
+            logger.warning(f"Error checking/deleting from firm_users_knowledge_base: {e}")
+        
+        # Use provided file_url if not found in Supabase table
         storage_url = db_file_url or file_url
         
-        # Delete from Supabase storage first
+        # 2. Delete from Neon user_vector_knowledge_base
+        try:
+            conn = await get_db_connection()
+            
+            # If we have neon_record_ids from Supabase, delete by those IDs
+            if neon_record_ids and len(neon_record_ids) > 0:
+                # Convert string IDs to integers (they're stored as strings to avoid scientific notation)
+                int_ids = [int(id) for id in neon_record_ids]
+                delete_query = "DELETE FROM user_vector_knowledge_base WHERE id = ANY($1::int[])"
+                result = await conn.execute(delete_query, int_ids)
+                deleted_count = int(result.split()[-1])
+                neon_deleted = True
+                logger.info(f"Deleted {deleted_count} Neon records by IDs for file {file_id}")
+            
+            # Also try to find by file_id (UUID) in case it's a Neon-only record
+            if not neon_deleted:
+                try:
+                    # Try to parse file_id as UUID and query Neon
+                    file_query = """
+                        SELECT file_url, user_id, agent_id
+                        FROM user_vector_knowledge_base
+                        WHERE id = $1
+                    """
+                    file_result = await conn.fetchrow(file_query, file_id)
+                    
+                    if file_result:
+                        neon_file_url = file_result['file_url']
+                        neon_user_id = file_result['user_id']
+                        neon_agent_id = file_result['agent_id']
+                        
+                        # Use Neon data if we don't have it from Supabase
+                        if not storage_url:
+                            storage_url = neon_file_url
+                        if not user_id:
+                            user_id = neon_user_id
+                        if not agent_id:
+                            agent_id = neon_agent_id
+                        
+                        # Delete all chunks with same file_url
+                        delete_query = """
+                            DELETE FROM user_vector_knowledge_base
+                            WHERE user_id = $1 AND file_url = $2
+                        """
+                        result = await conn.execute(delete_query, neon_user_id, neon_file_url)
+                        deleted_count = int(result.split()[-1])
+                        neon_deleted = True
+                        logger.info(f"Deleted {deleted_count} Neon chunks by file_url for file {file_id}")
+                except Exception as e:
+                    logger.debug(f"File {file_id} not found in Neon by UUID: {e}")
+            
+            # Also try deleting by file_url if we have it
+            if storage_url and not neon_deleted:
+                try:
+                    delete_query = "DELETE FROM user_vector_knowledge_base WHERE file_url = $1"
+                    result = await conn.execute(delete_query, storage_url)
+                    deleted_count = int(result.split()[-1])
+                    if deleted_count > 0:
+                        neon_deleted = True
+                        logger.info(f"Deleted {deleted_count} Neon chunks by file_url: {storage_url}")
+                except Exception as e:
+                    logger.debug(f"Could not delete from Neon by file_url: {e}")
+                    
+        except Exception as e:
+            logger.warning(f"Error deleting from Neon: {e}")
+        finally:
+            if conn:
+                await conn.close()
+                conn = None
+        
+        # 3. Delete from Supabase storage
         if storage_url:
             try:
-                supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
-                # URL format: https://xxx.supabase.co/storage/v1/object/public/agentkbs/knowledge-base/userId/agentName/filename
-                # Bucket is always 'agentkbs', path starts after bucket name
-                # Remove query string from URL if present
                 clean_url = storage_url.split('?')[0]
-                logger.info(f"File URL for deletion: {clean_url}")
                 url_parts = clean_url.split('/')
-                logger.info(f"URL parts: {url_parts}")
+                logger.info(f"Attempting storage deletion for URL: {clean_url}")
                 
-                if 'agentkbs' in url_parts:
+                # Try newsletter bucket first (used by chat uploads)
+                if 'newsletter' in url_parts:
+                    bucket_index = url_parts.index('newsletter')
+                    storage_path = '/'.join(url_parts[bucket_index + 1:])
+                    logger.info(f"Deleting from 'newsletter' bucket: {storage_path}")
+                    result = supabase.storage.from_('newsletter').remove([storage_path])
+                    storage_deleted = True
+                    logger.info(f"Deleted from newsletter bucket")
+                # Try agentkbs bucket (used by agent settings uploads)
+                elif 'agentkbs' in url_parts:
                     bucket_index = url_parts.index('agentkbs')
                     storage_path = '/'.join(url_parts[bucket_index + 1:])
-                    logger.info(f"Deleting from Supabase storage bucket 'agentkbs': {storage_path}")
+                    logger.info(f"Deleting from 'agentkbs' bucket: {storage_path}")
                     result = supabase.storage.from_('agentkbs').remove([storage_path])
-                    logger.info(f"Supabase delete result: {result}")
-                    logger.info(f"Successfully deleted file from Supabase storage")
+                    storage_deleted = True
+                    logger.info(f"Deleted from agentkbs bucket")
+                # Try knowledge-base bucket as fallback
+                elif 'knowledge-base' in url_parts:
+                    bucket_index = url_parts.index('knowledge-base')
+                    storage_path = '/'.join(url_parts[bucket_index + 1:])
+                    logger.info(f"Deleting from 'knowledge-base' bucket: {storage_path}")
+                    result = supabase.storage.from_('knowledge-base').remove([storage_path])
+                    storage_deleted = True
+                    logger.info(f"Deleted from knowledge-base bucket")
                 else:
-                    logger.warning(f"Could not find 'agentkbs' bucket in URL: {clean_url}")
+                    logger.warning(f"Could not identify bucket in URL: {clean_url}")
             except Exception as storage_error:
                 logger.warning(f"Failed to delete from Supabase storage: {storage_error}")
-                import traceback
-                logger.warning(f"Traceback: {traceback.format_exc()}")
-                # Continue with database deletion even if storage fails
+        
+        # Build response message
+        deleted_from = []
+        if supabase_deleted:
+            deleted_from.append("Supabase table")
+        if neon_deleted:
+            deleted_from.append("Neon DB")
+        if storage_deleted:
+            deleted_from.append("Storage")
+        
+        if deleted_from:
+            message = f"File deleted from: {', '.join(deleted_from)}"
         else:
-            logger.warning(f"No file URL available for storage deletion")
-
-        # Delete from database if record exists
-        if db_file_url and user_id and agent_id:
-            # Delete all chunks with same file_url (multiple chunks per file)
-            delete_query = """
-                DELETE FROM user_vector_knowledge_base
-                WHERE user_id = $1
-                  AND agent_id = $2
-                  AND file_url = $3
-            """
-
-            result = await conn.execute(delete_query, user_id, agent_id, db_file_url)
-
-            # Extract number of deleted rows
-            deleted_count = int(result.split()[-1])
-
-            logger.info(f"Deleted file {file_id} and {deleted_count} chunks for user {user_id}, agent {agent_id}")
-
-            return DeleteResponse(
-                success=True,
-                message=f"File and {deleted_count} chunks deleted successfully"
-            )
-        else:
-            # DB record not found, but we may have deleted from storage
-            logger.info(f"File {file_id} not found in database, storage deletion attempted")
-            return DeleteResponse(
-                success=True,
-                message="File not found in database, storage cleanup attempted"
-            )
+            message = "File not found in any location"
+        
+        logger.info(f"Delete operation for {file_id}: {message}")
+        
+        return DeleteResponse(
+            success=True,
+            message=message
+        )
 
     except HTTPException:
         raise
