@@ -6922,7 +6922,7 @@ async def extract_text_from_file(request: FileExtractionRequest):
 
 @app.get("/api/file/status/{file_id}")
 async def get_file_processing_status(file_id: str):
-    """Get processing status for a file"""
+    """Get processing status for a file with real-time progress updates"""
     try:
         result = await file_processing_service.get_processing_record(file_id)
         
@@ -6931,9 +6931,23 @@ async def get_file_processing_status(file_id: str):
         
         data = result["data"]
         
+        # Check SSE status first for real-time progress
+        sse_status = None
+        with _file_status_lock:
+            sse_status = file_processing_status.get(file_id)
+        
         # Derive status from neon_record_ids (processing_status column was removed)
         neon_ids = data.get("neon_record_ids", []) or []
-        status = "completed" if len(neon_ids) > 0 else "processing"
+        
+        # Use SSE status if available, otherwise fall back to simple binary status
+        if sse_status:
+            status = sse_status.get("status", "processing")
+            message = sse_status.get("message", "")
+            progress = sse_status.get("progress", 0)
+        else:
+            status = "completed" if len(neon_ids) > 0 else "processing"
+            message = "Processing complete" if len(neon_ids) > 0 else "Processing..."
+            progress = 100 if len(neon_ids) > 0 else 30
         
         return {
             "success": True,
@@ -6945,7 +6959,11 @@ async def get_file_processing_status(file_id: str):
                 "processing_status": status,  # Frontend expects 'processing_status' not 'status'
                 "neon_record_ids": neon_ids,
                 "created_at": data.get("created_at"),
-                "updated_at": data.get("updated_at")
+                "updated_at": data.get("updated_at"),
+                # Add SSE status fields for real-time progress
+                "status": status,
+                "message": message,
+                "progress": progress
             }
         }
         
