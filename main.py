@@ -8665,6 +8665,101 @@ async def notify_agent_enablement(request: AgentEnablementNotification):
 # ============================================================================
 
 # ============================================================================
+# AGENT REDIRECT ENDPOINT
+# ============================================================================
+
+class AgentRedirectRequest(BaseModel):
+    agent_id: str
+    user_id: str  # Required - need to know which user to redirect
+    conversation_id: Optional[str] = None
+    message: Optional[str] = None  # Optional message to show before redirect
+
+@app.post("/api/agents/redirect")
+async def redirect_to_agent(request: AgentRedirectRequest):
+    """
+    Endpoint for n8n to trigger automatic redirect to another agent's chat page.
+    Broadcasts via Supabase Realtime to the user's frontend.
+    """
+    try:
+        agent_id = request.agent_id
+        user_id = request.user_id
+        conversation_id = request.conversation_id
+        message = request.message
+        
+        logger.info(f"🔀 Agent redirect request: agent={agent_id}, user={user_id}, conversation={conversation_id}")
+        
+        # Build the redirect URL
+        redirect_url = f"/chat/{agent_id}"
+        
+        # Add query parameters if provided
+        query_params = []
+        if conversation_id:
+            query_params.append(f"conversationId={conversation_id}")
+        
+        if query_params:
+            redirect_url += "?" + "&".join(query_params)
+        
+        # Broadcast redirect signal via Supabase Realtime
+        # Frontend listens to channel: agent-redirect-{user_id}
+        broadcast_sent = False
+        try:
+            import httpx
+            supabase_url = os.getenv('SUPABASE_URL') or os.getenv('VITE_SUPABASE_URL')
+            supabase_key = os.getenv('SUPABASE_SERVICE_ROLE_KEY') or os.getenv('SUPABASE_KEY') or os.getenv('VITE_SUPABASE_ANON_KEY')
+            
+            if supabase_url and supabase_key:
+                broadcast_url = f"{supabase_url}/realtime/v1/api/broadcast"
+                async with httpx.AsyncClient() as client:
+                    broadcast_response = await client.post(
+                        broadcast_url,
+                        headers={
+                            'apikey': supabase_key,
+                            'Authorization': f'Bearer {supabase_key}',
+                            'Content-Type': 'application/json'
+                        },
+                        json={
+                            'messages': [{
+                                'topic': f'agent-redirect-{user_id}',
+                                'event': 'redirect_to_agent',
+                                'payload': {
+                                    'user_id': user_id,
+                                    'agent_id': agent_id,
+                                    'redirect_url': redirect_url,
+                                    'message': message,
+                                    'timestamp': datetime.now(timezone.utc).isoformat()
+                                }
+                            }]
+                        },
+                        timeout=10.0
+                    )
+                    broadcast_sent = broadcast_response.status_code == 200
+                    logger.info(f"📡 Redirect broadcast sent: status={broadcast_response.status_code}")
+        except Exception as broadcast_error:
+            logger.warning(f"⚠️ Redirect broadcast failed: {broadcast_error}")
+        
+        logger.info(f"✅ Redirect URL generated: {redirect_url}")
+        
+        return {
+            "success": True,
+            "redirect_url": redirect_url,
+            "agent_id": agent_id,
+            "user_id": user_id,
+            "broadcast_sent": broadcast_sent,
+            "message": f"Redirect to {agent_id} chat page"
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Error in agent redirect: {str(e)}")
+        return {
+            "success": False,
+            "error": f"Failed to process redirect: {str(e)}"
+        }
+
+# ============================================================================
+# END AGENT REDIRECT ENDPOINT
+# ============================================================================
+
+# ============================================================================
 # CONTENT REFRESH NOTIFICATION ENDPOINT
 # ============================================================================
 
