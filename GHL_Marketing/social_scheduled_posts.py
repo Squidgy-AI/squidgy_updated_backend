@@ -6,7 +6,8 @@ Fetches social media posts from GHL API using pit_token for Authorization
 import os
 import logging
 from typing import Optional, List
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 import httpx
 from supabase import create_client, Client
@@ -15,6 +16,143 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/social/scheduled", tags=["social_scheduled"])
+
+
+def generate_error_html(error_message: str, status_code: int) -> str:
+    """Generate HTML error page for user-friendly error display"""
+    return f"""
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Error - Unable to Postpone Post</title>
+        <style>
+            * {{
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
+            }}
+            body {{
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+                background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+                min-height: 100vh;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                padding: 20px;
+            }}
+            .container {{
+                background: white;
+                border-radius: 16px;
+                box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+                padding: 48px;
+                max-width: 500px;
+                width: 100%;
+                text-align: center;
+                animation: slideUp 0.5s ease-out;
+            }}
+            @keyframes slideUp {{
+                from {{
+                    opacity: 0;
+                    transform: translateY(30px);
+                }}
+                to {{
+                    opacity: 1;
+                    transform: translateY(0);
+                }}
+            }}
+            .error-icon {{
+                width: 80px;
+                height: 80px;
+                background: #ef4444;
+                border-radius: 50%;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                margin: 0 auto 24px;
+                animation: scaleIn 0.5s ease-out 0.2s both;
+                position: relative;
+            }}
+            @keyframes scaleIn {{
+                from {{
+                    transform: scale(0);
+                }}
+                to {{
+                    transform: scale(1);
+                }}
+            }}
+            .error-icon::before,
+            .error-icon::after {{
+                content: '';
+                position: absolute;
+                width: 4px;
+                height: 40px;
+                background: white;
+                border-radius: 2px;
+            }}
+            .error-icon::before {{
+                transform: rotate(45deg);
+            }}
+            .error-icon::after {{
+                transform: rotate(-45deg);
+            }}
+            h1 {{
+                color: #1f2937;
+                font-size: 28px;
+                font-weight: 700;
+                margin-bottom: 16px;
+            }}
+            p {{
+                color: #6b7280;
+                font-size: 16px;
+                line-height: 1.6;
+                margin-bottom: 32px;
+            }}
+            .error-details {{
+                background: #fef2f2;
+                border-left: 4px solid #ef4444;
+                border-radius: 8px;
+                padding: 16px;
+                margin: 24px 0;
+                font-size: 14px;
+                color: #991b1b;
+                text-align: left;
+            }}
+            .btn {{
+                display: inline-block;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
+                padding: 14px 32px;
+                border-radius: 8px;
+                text-decoration: none;
+                font-weight: 600;
+                font-size: 16px;
+                transition: transform 0.2s, box-shadow 0.2s;
+                box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+            }}
+            .btn:hover {{
+                transform: translateY(-2px);
+                box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
+            }}
+            .btn:active {{
+                transform: translateY(0);
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="error-icon"></div>
+            <h1>Unable to Postpone Post</h1>
+            <p>We encountered an issue while trying to postpone your social media post.</p>
+            <div class="error-details">
+                <strong>Error:</strong> {error_message}
+            </div>
+            <a href="https://app.squidgy.ai/" class="btn">Go to Dashboard</a>
+        </div>
+    </body>
+    </html>
+    """
 
 # Initialize Supabase client
 SUPABASE_URL = os.getenv('SUPABASE_URL')
@@ -644,26 +782,45 @@ async def edit_social_post(
 
 @router.get("/posts/{post_id}/postpone")
 async def postpone_social_post(
+    request: Request,
     post_id: str,
     firm_user_id: str = Query(..., description="User ID"),
-    agent_id: str = Query(default="SOL", description="Agent ID")
+    agent_id: str = Query(default="SOL", description="Agent ID"),
+    format: Optional[str] = Query(default=None, description="Force response format: 'html' or 'json'")
 ):
     """
     Postpone a scheduled social media post by deleting it and recreating 
     with a far future schedule date. The edit API appears to publish 
     immediately, so delete + recreate is the safer approach.
+    
+    Returns HTML for browser requests (from email links) or JSON for API calls.
+    Can be overridden with ?format=html or ?format=json query parameter.
     """
+    # Detect if request is from browser (email link) or API call
+    accept_header = request.headers.get('accept', '')
+    wants_html = 'text/html' in accept_header and 'application/json' not in accept_header
+    
+    # Allow override via query parameter
+    if format:
+        wants_html = format.lower() == 'html'
+    
     try:
         credentials = await get_ghl_credentials(firm_user_id, agent_id)
         
         if not credentials:
-            raise HTTPException(status_code=404, detail="GHL account not found. Please complete GHL setup.")
+            error_msg = "GHL account not found. Please complete GHL setup."
+            if wants_html:
+                return HTMLResponse(content=generate_error_html(error_msg, 404), status_code=404)
+            raise HTTPException(status_code=404, detail=error_msg)
         
         location_id = credentials.get('location_id')
         pit_token = credentials.get('pit_token')
         
         if not location_id or not pit_token:
-            raise HTTPException(status_code=400, detail="Missing GHL credentials. Please complete setup in Settings.")
+            error_msg = "Missing GHL credentials. Please complete setup in Settings."
+            if wants_html:
+                return HTMLResponse(content=generate_error_html(error_msg, 400), status_code=400)
+            raise HTTPException(status_code=400, detail=error_msg)
         
         headers = {
             "Authorization": f"Bearer {pit_token}",
@@ -681,9 +838,12 @@ async def postpone_social_post(
             )
             
             if not get_response.is_success:
+                error_msg = f"Failed to fetch post: {get_response.text}"
+                if wants_html:
+                    return HTMLResponse(content=generate_error_html(error_msg, get_response.status_code), status_code=get_response.status_code)
                 raise HTTPException(
                     status_code=get_response.status_code, 
-                    detail=f"Failed to fetch post: {get_response.text}"
+                    detail=error_msg
                 )
             
             existing_post = get_response.json()
@@ -699,9 +859,12 @@ async def postpone_social_post(
             # Check if post is already published - cannot postpone published posts
             post_status = post_data.get('status', '').lower()
             if post_status == 'published':
+                error_msg = "Cannot postpone a published post. This post has already been published to social media."
+                if wants_html:
+                    return HTMLResponse(content=generate_error_html(error_msg, 400), status_code=400)
                 raise HTTPException(
                     status_code=400, 
-                    detail="Cannot postpone a published post. This post has already been published to social media."
+                    detail=error_msg
                 )
             
             # Get accountIds
@@ -712,7 +875,10 @@ async def postpone_social_post(
                     account_ids = [single_account_id]
             
             if not account_ids:
-                raise HTTPException(status_code=400, detail="No accountIds found in post data")
+                error_msg = "No accountIds found in post data"
+                if wants_html:
+                    return HTMLResponse(content=generate_error_html(error_msg, 400), status_code=400)
+                raise HTTPException(status_code=400, detail=error_msg)
             
             # Step 2: Delete the existing post
             delete_response = await client.delete(
@@ -724,9 +890,12 @@ async def postpone_social_post(
             logger.info(f"[SOCIAL POSTS] DELETE response: {delete_response.status_code} - {delete_response.text}")
             
             if not delete_response.is_success:
+                error_msg = f"Failed to delete post: {delete_response.text}"
+                if wants_html:
+                    return HTMLResponse(content=generate_error_html(error_msg, delete_response.status_code), status_code=delete_response.status_code)
                 raise HTTPException(
                     status_code=delete_response.status_code, 
-                    detail=f"Failed to delete post: {delete_response.text}"
+                    detail=error_msg
                 )
             
             # Step 3: Recreate the post with the postponed schedule date (2099)
@@ -771,9 +940,12 @@ async def postpone_social_post(
                     f"[SOCIAL POSTS] Failed to recreate post after deletion! "
                     f"Original post data preserved in logs. Status: {create_response.status_code}"
                 )
+                error_msg = f"Post was deleted but failed to recreate: {create_response.text}"
+                if wants_html:
+                    return HTMLResponse(content=generate_error_html(error_msg, create_response.status_code), status_code=create_response.status_code)
                 raise HTTPException(
                     status_code=create_response.status_code, 
-                    detail=f"Post was deleted but failed to recreate: {create_response.text}"
+                    detail=error_msg
                 )
             
             create_result = create_response.json()
@@ -854,16 +1026,152 @@ async def postpone_social_post(
             except Exception as e:
                 logger.error(f"[SOCIAL POSTS] Failed to update post_confirmation_checker: {e}")
             
-            return {
-                "success": True,
-                "message": f"Post postponed successfully to {schedule_date}",
-                "old_post_id": post_id,
-                "new_post_id": new_post_id,
-                "new_schedule_date": schedule_date,
-                "ghl_response": create_result
-            }
+            # Return appropriate response format based on request source
+            if wants_html:
+                # Return HTML success page with redirect to dashboard for browser requests
+                html_content = f"""
+            <!DOCTYPE html>
+            <html lang="en">
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>Post Postponed Successfully</title>
+                <style>
+                    * {{
+                        margin: 0;
+                        padding: 0;
+                        box-sizing: border-box;
+                    }}
+                    body {{
+                        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+                        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                        min-height: 100vh;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        padding: 20px;
+                    }}
+                    .container {{
+                        background: white;
+                        border-radius: 16px;
+                        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+                        padding: 48px;
+                        max-width: 500px;
+                        width: 100%;
+                        text-align: center;
+                        animation: slideUp 0.5s ease-out;
+                    }}
+                    @keyframes slideUp {{
+                        from {{
+                            opacity: 0;
+                            transform: translateY(30px);
+                        }}
+                        to {{
+                            opacity: 1;
+                            transform: translateY(0);
+                        }}
+                    }}
+                    .success-icon {{
+                        width: 80px;
+                        height: 80px;
+                        background: #10b981;
+                        border-radius: 50%;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        margin: 0 auto 24px;
+                        animation: scaleIn 0.5s ease-out 0.2s both;
+                    }}
+                    @keyframes scaleIn {{
+                        from {{
+                            transform: scale(0);
+                        }}
+                        to {{
+                            transform: scale(1);
+                        }}
+                    }}
+                    .checkmark {{
+                        width: 40px;
+                        height: 40px;
+                        border: 4px solid white;
+                        border-top: none;
+                        border-right: none;
+                        transform: rotate(-45deg);
+                        margin-top: 10px;
+                    }}
+                    h1 {{
+                        color: #1f2937;
+                        font-size: 28px;
+                        font-weight: 700;
+                        margin-bottom: 16px;
+                    }}
+                    p {{
+                        color: #6b7280;
+                        font-size: 16px;
+                        line-height: 1.6;
+                        margin-bottom: 32px;
+                    }}
+                    .btn {{
+                        display: inline-block;
+                        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                        color: white;
+                        padding: 14px 32px;
+                        border-radius: 8px;
+                        text-decoration: none;
+                        font-weight: 600;
+                        font-size: 16px;
+                        transition: transform 0.2s, box-shadow 0.2s;
+                        box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+                    }}
+                    .btn:hover {{
+                        transform: translateY(-2px);
+                        box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
+                    }}
+                    .btn:active {{
+                        transform: translateY(0);
+                    }}
+                    .details {{
+                        background: #f9fafb;
+                        border-radius: 8px;
+                        padding: 16px;
+                        margin: 24px 0;
+                        font-size: 14px;
+                        color: #4b5563;
+                    }}
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <div class="success-icon">
+                        <div class="checkmark"></div>
+                    </div>
+                    <h1>Post Postponed Successfully!</h1>
+                    <p>Your social media post has been postponed and will not be published at the originally scheduled time.</p>
+                    <div class="details">
+                        <strong>Post ID:</strong> {new_post_id}<br>
+                        <strong>New Schedule:</strong> Postponed indefinitely
+                    </div>
+                    <a href="https://app.squidgy.ai/" class="btn">Go to Dashboard</a>
+                </div>
+            </body>
+            </html>
+            """
+                return HTMLResponse(content=html_content, status_code=200)
+            else:
+                # Return JSON for API calls
+                return JSONResponse(content={
+                    "success": True,
+                    "message": f"Post postponed successfully to {schedule_date}",
+                    "old_post_id": post_id,
+                    "new_post_id": new_post_id,
+                    "new_schedule_date": schedule_date,
+                    "ghl_response": create_result
+                }, status_code=200)
             
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        error_msg = str(e)
+        if wants_html:
+            return HTMLResponse(content=generate_error_html(error_msg, 500), status_code=500)
+        raise HTTPException(status_code=500, detail=error_msg)
