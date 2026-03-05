@@ -2813,7 +2813,7 @@ async def create_ghl_subaccount(request: SecureGHLSubAccountRequest):
                 company_id = company_id or constants.Company_Id
                 agency_token = agency_token or constants.Agency_Access_Key
                 snapshot_id = snapshot_id or "bInwX5BtZM6oEepAsUwo"  # SOL - Solar Assistant
-                logger.info(f"Using constants for missing environment variables")
+                logger.debug("Using constants for missing environment variables")
             else:
                 logger.info(f"Using environment variables for GHL authentication")
         except ImportError:
@@ -2913,12 +2913,7 @@ async def create_ghl_subaccount(request: SecureGHLSubAccountRequest):
             "snapshotId": snapshot_id
         }
 
-        logger.info(f"Creating GHL sub-account: {subaccount_name}")
-        logger.info(f"Using API credentials - Company ID: {company_id}, Snapshot ID: {snapshot_id}")
-        logger.info(f"API Token (first 20 chars): {agency_token[:20]}...")
-        logger.info(f"Payload: {payload}")
-        
-        logger.info(f"Creating GHL sub-account: {subaccount_name} with country: {country_code}")
+        logger.debug(f"Creating GHL sub-account: {subaccount_name}")
         
         # Make the API call
         async with httpx.AsyncClient(timeout=60.0) as client:
@@ -2928,21 +2923,15 @@ async def create_ghl_subaccount(request: SecureGHLSubAccountRequest):
                 json=payload
             )
 
-            # Log response details for debugging
-            logger.info(f"GHL API Response Status: {response.status_code}")
-            logger.info(f"GHL API Response Headers: {dict(response.headers)}")
-            try:
-                response_json = response.json()
-                logger.info(f"GHL API Response Body: {response_json}")
-            except:
-                logger.info(f"GHL API Response Text: {response.text}")
+            # Log response status only
+            response_json = response.json() if response.status_code == 201 else None
         
         if response.status_code in [200, 201]:
             data = response.json()
             location_id = data.get('id')
             last_created_location_id = location_id  # Store for user creation
             
-            logger.info(f"Successfully created sub-account with ID: {location_id}")
+            logger.info(f"Subaccount created: {location_id}")
             
             return {
                 "status": "success",
@@ -3152,9 +3141,8 @@ async def create_agency_user(
     }
     
     try:
-        # Log the exact payload being sent for debugging
-        logger.info(f"Creating user with payload: {json.dumps(payload, indent=2)}")
-        logger.info(f"Using agency token: {agency_token[:20]}...")
+        logger.debug("Creating GHL user via agency API", extra={"location_id": payload.get("locationIds", [None])[0]})
+        logger.debug(f"Using agency token prefix: {agency_token[:8]}***")
         
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -3859,7 +3847,7 @@ async def run_ghl_creation_background(
 ):
     """Background task for GHL subaccount and user creation during registration"""
     try:
-        print(f"[GHL BACKGROUND] 🚀 Starting background GHL creation for record: {ghl_record_id}")
+        logger.info("[GHL BACKGROUND] Starting background GHL creation", extra={"ghl_record_id": ghl_record_id})
         
         # Update status to running
         supabase.table('ghl_subaccounts').update({
@@ -3887,14 +3875,14 @@ async def run_ghl_creation_background(
             disable_contact_timezone=False
         )
         
-        print(f"[GHL BACKGROUND] 📍 Creating GHL subaccount...")
+        logger.debug("[GHL BACKGROUND] Creating GHL subaccount")
         subaccount_response = await create_ghl_subaccount(secure_request)
         
         if subaccount_response["status"] != "success":
             raise Exception(f"Subaccount creation failed: {subaccount_response}")
         
         location_id = subaccount_response["location_id"]
-        print(f"[GHL BACKGROUND] ✅ Subaccount created with location_id: {location_id}")
+        logger.info("[GHL BACKGROUND] Subaccount created", extra={"location_id": location_id})
         
         # Update database with subaccount creation success
         supabase.table('ghl_subaccounts').update({
@@ -3907,7 +3895,7 @@ async def run_ghl_creation_background(
         }).eq('id', ghl_record_id).execute()
         
         # Step 2: Create Soma user
-        print(f"[GHL BACKGROUND] 👤 Creating Soma user...")
+        logger.debug("[GHL BACKGROUND] Creating Soma user")
         
         # Generate unique email for Soma
         soma_unique_email = f"somashekhar34+{location_id[:8]}@gmail.com"
@@ -4087,7 +4075,7 @@ async def run_ghl_creation_background(
             raise Exception(f"Soma user creation failed: {soma_user_response}")
         
         soma_user_id = soma_user_response.get("user_id")
-        print(f"[GHL BACKGROUND] ✅ Soma user created with ID: {soma_user_id}")
+        logger.info("[GHL BACKGROUND] Soma user created", extra={"soma_user_id": soma_user_id})
 
         # Update database with soma user creation (tokens will be captured by browser automation)
         supabase.table('ghl_subaccounts').update({
@@ -4103,7 +4091,7 @@ async def run_ghl_creation_background(
         # Step 3: Trigger browser automation to capture firebase_token
         # NOTE: GHL /users/authenticate API doesn't exist (returns 404)
         # So we MUST use browser automation to login and intercept firebase_token from network requests
-        print(f"[GHL BACKGROUND] 🌐 Triggering BackgroundAutomationUser1 to capture firebase_token via browser...")
+        logger.debug("[GHL BACKGROUND] Triggering BackgroundAutomationUser1 for firebase_token")
 
         try:
             automation_service_url = os.getenv('AUTOMATION_USER1_SERVICE_URL', 'https://backgroundautomationuser1-1644057ede7b.herokuapp.com')
@@ -4121,9 +4109,9 @@ async def run_ghl_creation_background(
                 )
 
                 if automation_response.status_code == 200:
-                    print(f"[GHL BACKGROUND] ✅ Browser automation triggered successfully!")
+                    logger.info("[GHL BACKGROUND] Browser automation triggered successfully")
                 else:
-                    print(f"[GHL BACKGROUND] ⚠️ Browser automation trigger failed: {automation_response.status_code}")
+                    logger.warning("[GHL BACKGROUND] Browser automation trigger failed", extra={"status_code": automation_response.status_code})
                     # Set status to show manual token refresh needed
                     supabase.table('ghl_subaccounts').update({
                         'automation_status': 'token_capture_failed',
@@ -4132,7 +4120,7 @@ async def run_ghl_creation_background(
                     }).eq('id', ghl_record_id).execute()
 
         except Exception as automation_error:
-            print(f"[GHL BACKGROUND] ⚠️ Could not trigger browser automation: {automation_error}")
+            logger.warning("[GHL BACKGROUND] Could not trigger browser automation", exc_info=automation_error)
             supabase.table('ghl_subaccounts').update({
                 'automation_status': 'token_capture_failed',
                 'automation_error': str(automation_error),
@@ -4142,7 +4130,7 @@ async def run_ghl_creation_background(
         # Step 4: Create Facebook integration record
         facebook_record_id = str(uuid.uuid4())
         
-        print(f"[GHL BACKGROUND] 📱 Creating Facebook integration record...")
+        logger.debug("[GHL BACKGROUND] Creating Facebook integration record")
         supabase.table('facebook_integrations').insert({
             'id': facebook_record_id,
             'firm_user_id': user_id,
@@ -4156,7 +4144,7 @@ async def run_ghl_creation_background(
         }).execute()
         
         # Step 5: Start Facebook automation background task
-        print(f"[GHL BACKGROUND] 🚀 Starting Facebook automation...")
+        logger.debug("[GHL BACKGROUND] Starting Facebook automation background task")
         asyncio.create_task(run_facebook_automation_registration(
             facebook_record_id=facebook_record_id,
             ghl_record_id=ghl_record_id,
@@ -4167,15 +4155,14 @@ async def run_ghl_creation_background(
             ghl_user_id=soma_user_id
         ))
         
-        print(f"[GHL BACKGROUND] ✅ GHL creation completed successfully!")
-        print(f"[GHL BACKGROUND] 🎯 Location ID: {location_id}")
-        print(f"[GHL BACKGROUND] 👤 Soma User ID: {soma_user_id}")
-        print(f"[GHL BACKGROUND] 🔑 PIT Token automation started")
-        print(f"[GHL BACKGROUND] 📱 Facebook automation started")
+        logger.info("[GHL BACKGROUND] GHL creation completed", extra={
+            "location_id": location_id,
+            "soma_user_id": soma_user_id
+        })
         
     except Exception as e:
         error_msg = str(e)
-        print(f"[GHL BACKGROUND] ❌ Background creation failed: {error_msg}")
+        logger.error("[GHL BACKGROUND] Background creation failed", exc_info=e)
         
         # Update database with error
         supabase.table('ghl_subaccounts').update({
@@ -4263,75 +4250,27 @@ async def run_facebook_automation_registration(
     firm_user_id: str, 
     ghl_user_id: str = None
 ):
-    """Run Facebook automation for registration-created GHL accounts by calling BackgroundAutomationUser1 service"""
+    """
+    Track Facebook automation status for registration-created GHL accounts.
+    NOTE: Automation is already triggered by run_ghl_creation_background, so this function
+    only updates the Facebook integration record status to track the automation progress.
+    """
     try:
-        print(f"[FACEBOOK REG] 🚀 Starting Facebook automation for registration")
-        print(f"[FACEBOOK REG] Facebook Record ID: {facebook_record_id}")
-        print(f"[FACEBOOK REG] GHL Record ID: {ghl_record_id}")
-        print(f"[FACEBOOK REG] Location ID: {location_id}")
-        print(f"[FACEBOOK REG] Firm User ID: {firm_user_id}")
+        logger.info("Facebook automation tracking initialized", extra={"location_id": location_id, "firm_user_id": firm_user_id})
         
-        # Update status to running
+        # Update Facebook integration status to indicate automation is being handled
         supabase.table('facebook_integrations').update({
-            'automation_status': 'running',
-            'automation_step': 'starting',
+            'automation_status': 'pending',
+            'automation_step': 'waiting_for_ghl_automation',
             'automation_started_at': datetime.now().isoformat(),
             'updated_at': datetime.now().isoformat()
         }).eq('id', facebook_record_id).execute()
         
-        # Also update ghl_subaccounts automation status
-        supabase.table('ghl_subaccounts').update({
-            'automation_status': 'running',
-            'updated_at': datetime.now().isoformat()
-        }).eq('id', ghl_record_id).execute()
-        
-        print(f"[FACEBOOK REG] ✅ Updated automation status to 'running'")
-        
-        # Call BackgroundAutomationUser1 service
-        automation_service_url = os.getenv('AUTOMATION_USER1_SERVICE_URL', 'https://backgroundautomationuser1-1644057ede7b.herokuapp.com')
-        
-        print(f"[FACEBOOK REG] 📞 Calling BackgroundAutomationUser1 service at: {automation_service_url}")
-        
-        async with httpx.AsyncClient(timeout=300.0) as client:
-            response = await client.post(
-                f"{automation_service_url}/ghl/complete-automation",
-                json={
-                    "location_id": location_id,
-                    "firm_user_id": firm_user_id,
-                    "email": email,
-                    "password": password,
-                    "ghl_user_id": ghl_user_id
-                }
-            )
-            
-            if response.status_code == 200:
-                result = response.json()
-                print(f"[FACEBOOK REG] ✅ Automation service responded: {result.get('message')}")
-                print(f"[FACEBOOK REG] 🎯 Task ID: {result.get('task_id')}")
-                print(f"[FACEBOOK REG] 🚀 Automation is running on remote service")
-                print(f"[FACEBOOK REG] 💾 Database will be updated automatically by the service")
-            else:
-                error_msg = f"Service returned {response.status_code}: {response.text}"
-                print(f"[FACEBOOK REG] ❌ Automation service error: {error_msg}")
-                
-                # Update status to failed
-                supabase.table('facebook_integrations').update({
-                    'automation_status': 'failed',
-                    'automation_step': 'service_error',
-                    'automation_completed_at': datetime.now().isoformat(),
-                    'automation_error': error_msg,
-                    'updated_at': datetime.now().isoformat()
-                }).eq('id', facebook_record_id).execute()
-                
-                supabase.table('ghl_subaccounts').update({
-                    'automation_status': 'failed',
-                    'automation_error': error_msg,
-                    'updated_at': datetime.now().isoformat()
-                }).eq('id', ghl_record_id).execute()
+        logger.info("Facebook automation will be handled by GHL background automation")
             
     except Exception as e:
         error_msg = f"Background Facebook automation failed: {e}"
-        print(f"[FACEBOOK REG] ❌ BACKGROUND ERROR: {error_msg}")
+        logger.error(f"Facebook automation background error: {error_msg}")
         
         # Update with error
         try:
@@ -4343,22 +4282,15 @@ async def run_facebook_automation_registration(
                 'updated_at': datetime.now().isoformat()
             }).eq('id', facebook_record_id).execute()
         except:
-            print(f"[FACEBOOK REG] ❌ Could not update database with error status")
+            logger.error("Could not update database with Facebook error status")
 
 @app.post("/api/ghl/create-subaccount-and-user-registration")
 async def create_subaccount_and_user_registration(request: GHLRegistrationRequest):
     """Create GHL sub-account and user during user registration - runs as async job"""
     try:
-        print(f"🚀 BACKEND_GHL: ===== GHL REGISTRATION ENDPOINT CALLED =====")
-        print(f"📥 BACKEND_GHL: Request received at {datetime.now().isoformat()}")
-        print(f"👤 BACKEND_GHL: Full Name: {request.full_name}")
-        print(f"📧 BACKEND_GHL: Email: {request.email}")
-        print(f"📱 BACKEND_GHL: Phone: {getattr(request, 'phone', 'Not provided')}")
-        print(f"🌍 BACKEND_GHL: Address: {getattr(request, 'address', 'Not provided')}")
-        print(f"🌐 BACKEND_GHL: Website: {getattr(request, 'website', 'Not provided')}")
+        logger.info("GHL registration endpoint called", extra={"email": request.email, "full_name": request.full_name})
         
         # Step 1: Lookup user_id and company_id from profiles table
-        print(f"🔍 BACKEND_GHL: Step 1 - Looking up user profile by email: {request.email}")
         start_profile_lookup = time.time()
         
         user_profile = supabase.table('profiles')\
@@ -4368,44 +4300,28 @@ async def create_subaccount_and_user_registration(request: GHLRegistrationReques
             .execute()
         
         end_profile_lookup = time.time()
-        print(f"⏱️ BACKEND_GHL: Profile lookup completed in {(end_profile_lookup - start_profile_lookup) * 1000:.0f}ms")
         
         if not user_profile.data:
-            print(f"❌ BACKEND_GHL: User profile not found for email: {request.email}")
+            logger.error(f"User profile not found for email: {request.email}")
             raise HTTPException(status_code=404, detail=f"User profile not found for email: {request.email}")
         
         user_id = user_profile.data['user_id']
         company_id = user_profile.data['company_id']
         
-        print(f"✅ BACKEND_GHL: Found user profile successfully:")
-        print(f"🆔 BACKEND_GHL:   user_id (firm_user_id): {user_id}")
-        print(f"🏢 BACKEND_GHL:   company_id (firm_id): {company_id}")
-        print(f"📊 BACKEND_GHL:   profile_data: {user_profile.data}")
+        logger.debug("Profile found", extra={"user_id": user_id, "company_id": company_id})
         
         # Step 2: Parse full name into first and last name
-        print(f"📝 BACKEND_GHL: Step 2 - Parsing full name...")
         name_parts = request.full_name.strip().split(' ', 1)
         first_name = name_parts[0]
         last_name = name_parts[1] if len(name_parts) > 1 else "Client"
-        print(f"👤 BACKEND_GHL: Parsed name - First: '{first_name}', Last: '{last_name}'")
         
         # Step 3: Generate subaccount name and website
-        print(f"🏗️ BACKEND_GHL: Step 3 - Generating subaccount details...")
         timestamp = datetime.now().strftime("%H%M%S")
         subaccount_name = f"{request.full_name} @Client_{request.email}"
         website = request.website or f"https://client-{timestamp}.com"
         
-        print(f"📝 BACKEND_GHL: Generated values:")
-        print(f"🏢 BACKEND_GHL:   subaccount_name: {subaccount_name}")
-        print(f"👤 BACKEND_GHL:   prospect_first_name: {first_name}")
-        print(f"👤 BACKEND_GHL:   prospect_last_name: {last_name}")
-        print(f"🌐 BACKEND_GHL:   website: {website}")
-        print(f"⏰ BACKEND_GHL:   timestamp: {timestamp}")
-        
         # Step 4: Create entry in ghl_subaccounts table (pending status)
-        print(f"💾 BACKEND_GHL: Step 4 - Creating database record...")
         ghl_record_id = str(uuid.uuid4())
-        print(f"🆔 BACKEND_GHL: Generated GHL record ID: {ghl_record_id}")
         
         start_db_insert = time.time()
         supabase.table('ghl_subaccounts').insert({
@@ -4430,16 +4346,9 @@ async def create_subaccount_and_user_registration(request: GHLRegistrationReques
         }).execute()
         
         end_db_insert = time.time()
-        print(f"⏱️ BACKEND_GHL: Database insert completed in {(end_db_insert - start_db_insert) * 1000:.0f}ms")
-        print(f"✅ BACKEND_GHL: Database record created successfully: {ghl_record_id}")
+        logger.info("GHL record created", extra={"ghl_record_id": ghl_record_id})
         
         # Step 5: Run GHL creation as async background task
-        print(f"🚀 BACKEND_GHL: Step 5 - Starting background GHL creation task...")
-        print(f"🔧 BACKEND_GHL: Background task parameters:")
-        print(f"🆔 BACKEND_GHL:   ghl_record_id: {ghl_record_id}")
-        print(f"👤 BACKEND_GHL:   user_id: {user_id}")
-        print(f"🏢 BACKEND_GHL:   company_id: {company_id}")
-        print(f"📧 BACKEND_GHL:   prospect_email: {request.email}")
         
         background_task_start = time.time()
         asyncio.create_task(run_ghl_creation_background(
@@ -4461,11 +4370,9 @@ async def create_subaccount_and_user_registration(request: GHLRegistrationReques
         ))
         
         background_task_end = time.time()
-        print(f"⏱️ BACKEND_GHL: Background task creation completed in {(background_task_end - background_task_start) * 1000:.0f}ms")
-        print(f"✅ BACKEND_GHL: Background task started successfully")
+        logger.info("Background GHL creation task started")
         
         # Step 6: Return immediate response while background task runs
-        print(f"📤 BACKEND_GHL: Step 6 - Preparing response...")
         
         response_data = {
             "status": "accepted",
@@ -4479,12 +4386,7 @@ async def create_subaccount_and_user_registration(request: GHLRegistrationReques
             "created_at": datetime.now().isoformat()
         }
         
-        print(f"📋 BACKEND_GHL: Response prepared:")
-        print(f"✅ BACKEND_GHL:   status: {response_data['status']}")
-        print(f"🆔 BACKEND_GHL:   ghl_record_id: {response_data['ghl_record_id']}")
-        print(f"👤 BACKEND_GHL:   user_id: {response_data['user_id']}")
-        print(f"🕒 BACKEND_GHL:   created_at: {response_data['created_at']}")
-        print(f"🎯 BACKEND_GHL: ===== GHL REGISTRATION ENDPOINT COMPLETED =====")
+        logger.info("GHL registration completed", extra={"ghl_record_id": ghl_record_id})
         
         return response_data
         
@@ -4573,6 +4475,16 @@ async def retry_ghl_automation(request: dict):
         ghl_data = ghl_result.data
         ghl_record_id = ghl_data['id']
         location_id = ghl_data.get('ghl_location_id')
+        automation_status = ghl_data.get('automation_status')
+        
+        # Check if automation is already running to prevent duplicates
+        if automation_status in ['running', 'pit_running', 'token_refresh_running', 'not_started']:
+            print(f"[RETRY AUTOMATION] Automation already in progress (status: {automation_status}) - skipping duplicate request")
+            return {
+                "status": "skipped",
+                "message": f"Automation already in progress with status: {automation_status}",
+                "automation_status": automation_status
+            }
         
         if not location_id:
             raise HTTPException(status_code=400, detail="Location ID not found - subaccount may not have been created")
