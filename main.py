@@ -36,6 +36,7 @@ from invitation_handler import InvitationHandler
 from file_processing_service import FileProcessingService
 from background_text_processor import get_background_processor, initialize_background_processor
 from web_analysis_client import WebAnalysisClient
+from env_config import get_supabase_config, get_environment, print_environment_info
 
 # Handler classes
 
@@ -77,17 +78,19 @@ def update_file_status(file_id: str, status: str, message: str, progress: int = 
         }
         logger.info(f"File {file_id} status: {status} - {message} ({progress}%)")
 
-# Environment variables
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
-SUPABASE_SCHEMA = os.getenv("SUPABASE_SCHEMA", "public")
+# Load environment-specific configuration
+_supabase_config = get_supabase_config()
+SUPABASE_URL = _supabase_config['url']
+SUPABASE_SERVICE_KEY = _supabase_config['service_key']
+SUPABASE_SCHEMA = _supabase_config['schema']
+
+# Other environment variables
 PERPLEXITY_API_KEY = os.getenv("PERPLEXITY_API_KEY")
 # OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
-
-print(f"Using Supabase URL: {SUPABASE_URL}")
-print(f"Using Supabase Schema: {SUPABASE_SCHEMA}")
+# Print environment info
+print_environment_info()
 
 # Initialize Supabase client
 def create_supabase_client() -> Client:
