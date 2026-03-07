@@ -6335,7 +6335,7 @@ async def create_ghl_user_sim(location_id: str, email: str, password: str, busin
 @app.post("/api/facebook/retry-token-capture")
 async def retry_facebook_token_capture(request: dict, background_tasks: BackgroundTasks):
     """
-    Retry Facebook token capture using ghl_automation_for_retry.py
+    Retry Facebook token capture by calling BackgroundAutomationUser1 service
     Updates facebook_integrations table with access_token, firebase_token, and expires_at
     """
     try:
