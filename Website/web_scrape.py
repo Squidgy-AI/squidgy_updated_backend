@@ -1,19 +1,10 @@
 # Website/web_scrape.py - Refactored to use external BackgroundAutomationUser1 service
 import os
-import asyncio
 import httpx
-from supabase import create_client, Client
-from dotenv import load_dotenv
-import time
 import traceback
-from datetime import datetime
+from dotenv import load_dotenv
 
 load_dotenv()
-
-# Initialize Supabase client
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
 # External automation service URL
 AUTOMATION_SERVICE_URL = os.getenv('AUTOMATION_USER1_SERVICE_URL', 'https://backgroundautomationuser1-1644057ede7b.herokuapp.com')
