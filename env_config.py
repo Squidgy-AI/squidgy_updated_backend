@@ -82,7 +82,7 @@ def get_automation_service_url() -> str:
     elif env == 'staging':
         return os.getenv('AUTOMATION_STAGING_SERVICE_URL', 'https://staging-squidgy-browser-automation.onrender.com')
     else:  # dev
-        return os.getenv('AUTOMATION_DEV_SERVICE_URL', 'https://backgroundautomationuser1-1644057ede7b.herokuapp.com')
+        return os.getenv('AUTOMATION_DEV_SERVICE_URL', 'https://staging-squidgy-browser-automation.onrender.com')
 
 
 # Helper function to print current environment
