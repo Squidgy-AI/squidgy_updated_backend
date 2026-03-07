@@ -74,15 +74,27 @@ def get_automation_service_url() -> str:
 
     Returns:
         str: Automation service URL
+
+    Raises:
+        ValueError: If required environment variable is not set
     """
     env = get_environment()
 
     if env == 'production':
-        return os.getenv('AUTOMATION_PROD_SERVICE_URL', 'https://prod-squidgy-browser-automation.onrender.com')
+        url = os.getenv('AUTOMATION_PROD_SERVICE_URL')
+        if not url:
+            raise ValueError("AUTOMATION_PROD_SERVICE_URL environment variable is required for production")
+        return url
     elif env == 'staging':
-        return os.getenv('AUTOMATION_STAGING_SERVICE_URL', 'https://staging-squidgy-browser-automation.onrender.com')
+        url = os.getenv('AUTOMATION_STAGING_SERVICE_URL')
+        if not url:
+            raise ValueError("AUTOMATION_STAGING_SERVICE_URL environment variable is required for staging")
+        return url
     else:  # dev
-        return os.getenv('AUTOMATION_DEV_SERVICE_URL', 'https://staging-squidgy-browser-automation.onrender.com')
+        url = os.getenv('AUTOMATION_DEV_SERVICE_URL')
+        if not url:
+            raise ValueError("AUTOMATION_DEV_SERVICE_URL environment variable is required for dev")
+        return url
 
 
 # Helper function to print current environment
