@@ -1,18 +1,11 @@
-# Website/web_scrape.py - FINAL VERSION
+# Website/web_scrape.py - Refactored to use external BackgroundAutomationUser1 service
 import os
 import asyncio
-import aiohttp
+import httpx
 from supabase import create_client, Client
 from dotenv import load_dotenv
-from playwright.async_api import async_playwright
 import time
 import traceback
-import tempfile
-from bs4 import BeautifulSoup
-from PIL import Image
-from io import BytesIO
-from concurrent.futures import ThreadPoolExecutor
-import threading
 from datetime import datetime
 
 load_dotenv()
@@ -22,522 +15,89 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
-# Create a thread pool for blocking operations
-executor = ThreadPoolExecutor(max_workers=3)
-
-# Create a lock for browser instances to prevent concurrent usage
-browser_lock = threading.Lock()
+# External automation service URL
+AUTOMATION_SERVICE_URL = os.getenv('AUTOMATION_USER1_SERVICE_URL', 'https://backgroundautomationuser1-1644057ede7b.herokuapp.com')
 
 async def capture_website_screenshot(url: str, session_id: str = None) -> dict:
     """
-    Captures a screenshot of the entire website using Playwright.
-    Optimized for Heroku environment.
+    Captures a screenshot by calling external BackgroundAutomationUser1 service.
+    The service handles browser automation and returns the Supabase storage URL.
     """
-    browser = None
-    tmp_path = None
-    
     try:
-        # Use session_id in filename if provided
-        if session_id:
-            filename = f"{session_id}_screenshot.jpg"
-        else:
-            filename = f"screenshot_{int(time.time())}.jpg"
-        
-        print(f"Attempting to capture screenshot for URL: {url}")
-        
-        async with async_playwright() as p:
-            # Launch browser with optimized settings for Heroku
-            browser_args = [
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-accelerated-2d-canvas",
-                "--no-first-run",
-                "--no-zygote",
-                "--single-process",
-                "--disable-gpu",
-                "--disable-background-timer-throttling",
-                "--disable-backgrounding-occluded-windows",
-                "--disable-renderer-backgrounding",
-                "--disable-features=TranslateUI",
-                "--disable-ipc-flooding-protection",
-                "--disable-background-networking",
-                "--disable-client-side-phishing-detection",
-                "--disable-default-apps",
-                "--disable-extensions",
-                "--disable-sync",
-                "--disable-translate",
-                "--hide-scrollbars",
-                "--metrics-recording-only",
-                "--mute-audio",
-                "--no-default-browser-check",
-                "--safebrowsing-disable-auto-update",
-                "--disable-features=VizDisplayCompositor"
-            ]
-            
-            # Launch browser - Playwright buildpack should handle everything
-            print("Launching Playwright browser...")
-            browser = await p.chromium.launch(
-                headless=True,
-                args=browser_args
-            )
-            
-            # Create page
-            page = await browser.new_page()
-            
-            # Set viewport size
-            await page.set_viewport_size({"width": 1920, "height": 1080})
-            
-            print(f"Navigating to URL: {url}")
-            try:
-                await page.goto(url, timeout=30000, wait_until="domcontentloaded")
-            except Exception as e:
-                print(f"Page load timeout/error, continuing anyway: {e}")
-            
-            # Wait for page to stabilize
-            await page.wait_for_timeout(3000)
-            
-            # Take screenshot
-            print("Taking screenshot...")
-            screenshot_bytes = await page.screenshot(
-                type="jpeg",
-                quality=80,
-                full_page=True
-            )
-            
-            # Save to temporary file
-            with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp_file:
-                tmp_path = tmp_file.name
-                tmp_file.write(screenshot_bytes)
-            
-            file_content = screenshot_bytes
-            
-            storage_path = f"screenshots/{filename}"
-            
-            # Remove existing file if present
-            try:
-                supabase.storage.from_('static').remove([storage_path])
-            except:
-                pass
-            
-            response = supabase.storage.from_('static').upload(
-                storage_path,
-                file_content,
-                {
-                    "content-type": "image/jpeg",
-                    "upsert": "true"
+        print(f"[SCREENSHOT] 📸 Requesting screenshot for URL: {url}")
+        print(f"[SCREENSHOT] 📞 Calling external automation service at: {AUTOMATION_SERVICE_URL}")
+
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            response = await client.post(
+                f"{AUTOMATION_SERVICE_URL}/website/screenshot",
+                json={
+                    "url": url,
+                    "session_id": session_id
                 }
             )
-            
-            # Handle the response
-            if hasattr(response, 'error') and response.error:
-                if "already exists" in str(response.error):
-                    public_url = supabase.storage.from_('static').get_public_url(storage_path)
-                    return {
-                        "status": "success",
-                        "message": "Screenshot captured successfully",
-                        "path": storage_path,
-                        "public_url": public_url,
-                        "filename": filename
-                    }
-                else:
-                    raise Exception(f"Failed to upload: {response.error}")
+
+            if response.status_code == 200:
+                result = response.json()
+                print(f"[SCREENSHOT] ✅ Screenshot captured successfully")
+                return result
             else:
-                public_url = supabase.storage.from_('static').get_public_url(storage_path)
+                error_msg = f"Service returned {response.status_code}: {response.text}"
+                print(f"[SCREENSHOT] ❌ Error: {error_msg}")
                 return {
-                    "status": "success",
-                    "message": "Screenshot captured successfully",
-                    "path": storage_path,
-                    "public_url": public_url,
-                    "filename": filename
+                    "status": "error",
+                    "message": error_msg,
+                    "path": None
                 }
-        
+
     except Exception as e:
         error_traceback = traceback.format_exc()
-        print(f"Error capturing screenshot: {e}")
-        print(f"Traceback: {error_traceback}")
-        
+        print(f"[SCREENSHOT] ❌ Error: {e}")
+        print(f"[SCREENSHOT] Traceback: {error_traceback}")
+
         return {
             "status": "error",
             "message": str(e),
             "error_details": error_traceback,
             "path": None
         }
-    
-    finally:
-        # Cleanup
-        if browser:
-            try:
-                await browser.close()
-            except Exception as e:
-                print(f"Error closing browser: {e}")
-        
-        if tmp_path and os.path.exists(tmp_path):
-            try:
-                os.unlink(tmp_path)
-            except Exception as e:
-                print(f"Error removing temp file: {e}")
 
-def capture_website_screenshot_sync(url: str, session_id: str = None) -> dict:
-    """Sync wrapper for capturing website screenshot"""
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        return loop.run_until_complete(capture_website_screenshot(url, session_id))
-    finally:
-        loop.close()
-
-def get_website_favicon(url: str, session_id: str = None) -> dict:
-    """
-    Gets the favicon from a website and saves it to Supabase Storage.
-    Synchronous version for backward compatibility.
-    """
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        return loop.run_until_complete(get_website_favicon_async(url, session_id))
-    finally:
-        loop.close()
 
 async def get_website_favicon_async(url: str, session_id: str = None) -> dict:
     """
-    Simple and reliable favicon capture using Playwright browser automation.
-    Gets the favicon exactly as it appears in the browser tab.
+    Gets favicon by calling external BackgroundAutomationUser1 service.
+    The service handles browser automation and returns the Supabase storage URL.
     """
-    print(f"Getting favicon from browser tab for URL: {url}, session_id: {session_id}")
-    
     try:
-        # Create filename
-        if session_id:
-            filename = f"{session_id}_logo.jpg"
-        else:
-            filename = f"logo_{int(time.time())}.jpg"
-        
-        async with async_playwright() as p:
-            # Launch browser in headless mode
-            browser = await p.chromium.launch(
-                headless=True,
-                args=[
-                    '--no-sandbox',
-                    '--disable-setuid-sandbox',
-                    '--disable-dev-shm-usage',
-                    '--disable-extensions',
-                    '--disable-gpu',
-                    '--no-first-run',
-                    '--no-default-browser-check',
-                    '--disable-default-apps'
-                ]
+        print(f"[FAVICON] 🎨 Requesting favicon for URL: {url}")
+        print(f"[FAVICON] 📞 Calling external automation service at: {AUTOMATION_SERVICE_URL}")
+
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            response = await client.post(
+                f"{AUTOMATION_SERVICE_URL}/website/favicon",
+                json={
+                    "url": url,
+                    "session_id": session_id
+                }
             )
-            
-            # Create page with user agent
-            page = await browser.new_page(
-                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-            )
-            
-            try:
-                # Navigate to the website with a reasonable timeout
-                await page.goto(url, timeout=30000, wait_until='domcontentloaded')
-                
-                # Wait a bit for favicon to load
-                await page.wait_for_timeout(2000)
-                
-                # Get the favicon URL using JavaScript
-                favicon_url = await page.evaluate("""
-                    () => {
-                        // Try to find favicon from various sources
-                        let favicon = null;
-                        
-                        // Look for link rel="icon"
-                        let link = document.querySelector('link[rel="icon"]') || 
-                                  document.querySelector('link[rel="shortcut icon"]') ||
-                                  document.querySelector('link[rel="apple-touch-icon"]') ||
-                                  document.querySelector('link[rel*="icon"]');
-                        
-                        if (link && link.href) {
-                            favicon = link.href;
-                        } else {
-                            // Fallback to default favicon.ico
-                            const url = new URL(window.location.href);
-                            favicon = url.origin + '/favicon.ico';
-                        }
-                        
-                        return favicon;
-                    }
-                """)
-                
-                print(f"Found favicon URL: {favicon_url}")
-                
-                if favicon_url:
-                    # Download the favicon using the same browser session
-                    response = await page.goto(favicon_url, timeout=10000)
-                    
-                    if response and response.status == 200:
-                        favicon_content = await response.body()
-                        
-                        # Convert to JPG using PIL
-                        img = Image.open(BytesIO(favicon_content))
-                        if img.mode != 'RGB':
-                            img = img.convert('RGB')
-                        
-                        # Save to temporary file
-                        with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp_file:
-                            tmp_path = tmp_file.name
-                            img.save(tmp_path, 'JPEG')
-                        
-                        # Upload to Supabase
-                        with open(tmp_path, 'rb') as f:
-                            file_content = f.read()
-                        
-                        storage_path = f"favicons/{filename}"
-                        
-                        # Remove existing file if present
-                        try:
-                            supabase.storage.from_('static').remove([storage_path])
-                        except:
-                            pass
-                        
-                        response = supabase.storage.from_('static').upload(
-                            storage_path,
-                            file_content,
-                            {
-                                "content-type": "image/jpeg",
-                                "upsert": "true"
-                            }
-                        )
-                        
-                        # Clean up
-                        os.unlink(tmp_path)
-                        
-                        # Handle the response properly
-                        if hasattr(response, 'error') and response.error:
-                            if "already exists" in str(response.error):
-                                public_url = supabase.storage.from_('static').get_public_url(storage_path)
-                                return {
-                                    "status": "success",
-                                    "message": "Favicon captured successfully from browser tab",
-                                    "path": storage_path,
-                                    "public_url": public_url,
-                                    "filename": filename
-                                }
-                            else:
-                                return {
-                                    "status": "error",
-                                    "message": f"Upload error: {response.error}",
-                                    "path": None
-                                }
-                        else:
-                            # Success case
-                            public_url = supabase.storage.from_('static').get_public_url(storage_path)
-                            return {
-                                "status": "success",
-                                "message": "Favicon captured successfully from browser tab",
-                                "path": storage_path,
-                                "public_url": public_url,
-                                "filename": filename
-                            }
-                    else:
-                        return {
-                            "status": "error",
-                            "message": f"Failed to download favicon: HTTP {response.status if response else 'No response'}",
-                            "path": None
-                        }
-                else:
-                    return {
-                        "status": "error",
-                        "message": "No favicon found on the website",
-                        "path": None
-                    }
-                    
-            except Exception as e:
-                print(f"Error loading page: {e}")
+
+            if response.status_code == 200:
+                result = response.json()
+                print(f"[FAVICON] ✅ Favicon captured successfully")
+                return result
+            else:
+                error_msg = f"Service returned {response.status_code}: {response.text}"
+                print(f"[FAVICON] ❌ Error: {error_msg}")
                 return {
                     "status": "error",
-                    "message": f"Failed to load website: {str(e)}",
+                    "message": error_msg,
                     "path": None
                 }
-            finally:
-                await browser.close()
-                
+
     except Exception as e:
-        print(f"Error in favicon capture: {str(e)}")
+        print(f"[FAVICON] ❌ Error: {e}")
         return {
             "status": "error",
             "message": str(e),
             "path": None
         }
 
-async def get_website_favicon_async_old(url: str, session_id: str = None) -> dict:
-    """
-    Async function to get website favicon
-    """
-    print(f"Getting favicon for URL: {url}, session_id: {session_id}")
-    
-    try:
-        # Create filename
-        if session_id:
-            filename = f"{session_id}_logo.jpg"
-        else:
-            filename = f"logo_{int(time.time())}.jpg"
-        
-        # Use aiohttp for async HTTP requests with complete headers
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
-            'Accept-Encoding': 'gzip, deflate',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1'
-        }
-        
-        # NO TIMEOUT - let it take as long as needed
-        timeout = aiohttp.ClientTimeout(total=None)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            # Get the website HTML
-            async with session.get(url, headers=headers) as response:
-                # Check for 503 Service Unavailable specifically
-                if response.status == 503:
-                    return {
-                        "status": "error",
-                        "message": f"Website temporarily unavailable (503 Service Unavailable). This often happens with websites that have bot protection like Cloudflare.",
-                        "path": None
-                    }
-                elif response.status != 200:
-                    return {
-                        "status": "error", 
-                        "message": f"Website returned HTTP {response.status}. Unable to access the site.",
-                        "path": None
-                    }
-                
-                html_text = await response.text()
-                
-            soup = BeautifulSoup(html_text, 'html.parser')
-            
-            # Look for favicon
-            favicon_url = None
-            for link in soup.find_all('link'):
-                rel = link.get('rel', [])
-                if isinstance(rel, list):
-                    rel = ' '.join(rel).lower()
-                else:
-                    rel = rel.lower()
-                    
-                if 'icon' in rel or 'shortcut icon' in rel or 'apple-touch-icon' in rel:
-                    favicon_url = link.get('href')
-                    print(f"Found favicon link: {favicon_url}")
-                    break
-            
-            # Default favicon location
-            if not favicon_url:
-                favicon_url = f"{url}/favicon.ico"
-                print(f"No favicon link found, trying default: {favicon_url}")
-            
-            # Fix relative URLs
-            if favicon_url and not favicon_url.startswith('http'):
-                if favicon_url.startswith('//'):
-                    favicon_url = 'https:' + favicon_url
-                elif favicon_url.startswith('/'):
-                    base_url = '/'.join(url.split('/')[0:3])
-                    favicon_url = base_url + favicon_url
-                else:
-                    base_url = '/'.join(url.split('/')[0:3])
-                    favicon_url = f"{base_url}/{favicon_url}"
-            
-            # Download favicon
-            if favicon_url:
-                try:
-                    async with session.get(favicon_url, headers=headers) as favicon_response:
-                        if favicon_response.status == 200:
-                            favicon_content = await favicon_response.read()
-                            
-                            # Convert to JPG using PIL
-                            img = Image.open(BytesIO(favicon_content))
-                            if img.mode != 'RGB':
-                                img = img.convert('RGB')
-                            
-                            # Save to temporary file
-                            with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp_file:
-                                tmp_path = tmp_file.name
-                                img.save(tmp_path, 'JPEG')
-                            
-                            # Upload to Supabase
-                            with open(tmp_path, 'rb') as f:
-                                file_content = f.read()
-                            
-                            storage_path = f"favicons/{filename}"
-                            
-                            # Remove existing file if present
-                            try:
-                                supabase.storage.from_('static').remove([storage_path])
-                            except:
-                                pass
-                            
-                            response = supabase.storage.from_('static').upload(
-                                storage_path,
-                                file_content,
-                                {
-                                    "content-type": "image/jpeg",
-                                    "upsert": "true"
-                                }
-                            )
-                            
-                            # Clean up
-                            os.unlink(tmp_path)
-                            
-                            # Handle the response properly
-                            if hasattr(response, 'error') and response.error:
-                                # Check if it's just a duplicate file error
-                                if "already exists" in str(response.error):
-                                    public_url = supabase.storage.from_('static').get_public_url(storage_path)
-                                    return {
-                                        "status": "success",
-                                        "message": "Favicon captured successfully",
-                                        "path": storage_path,
-                                        "public_url": public_url,
-                                        "filename": filename
-                                    }
-                                else:
-                                    return {
-                                        "status": "error",
-                                        "message": f"Upload error: {response.error}",
-                                        "path": None
-                                    }
-                            else:
-                                # Success case
-                                public_url = supabase.storage.from_('static').get_public_url(storage_path)
-                                return {
-                                    "status": "success",
-                                    "message": "Favicon captured successfully",
-                                    "path": storage_path,
-                                    "public_url": public_url,
-                                    "filename": filename
-                                }
-                        elif favicon_response.status == 503:
-                            print(f"Favicon blocked (503): {favicon_url}")
-                            return {
-                                "status": "error",
-                                "message": f"Favicon access blocked (503 Service Unavailable). The website has bot protection that is preventing favicon download.",
-                                "path": None
-                            }
-                        else:
-                            print(f"Favicon request failed with status {favicon_response.status}: {favicon_url}")
-                            return {
-                                "status": "error",
-                                "message": f"Favicon download failed with HTTP {favicon_response.status}",
-                                "path": None
-                            }
-                except Exception as e:
-                    print(f"Error downloading favicon: {e}")
-                    
-        return {
-            "status": "error",
-            "message": "No favicon found",
-            "path": None
-        }
-        
-    except Exception as e:
-        print(f"Error fetching favicon: {str(e)}")
-        return {
-            "status": "error",
-            "message": str(e),
-            "path": None
-        }
