@@ -1,12 +1,17 @@
 # routes/admin.py - Admin API routes for user management
 
 import os
+import sys
 import logging
 import asyncpg
 from fastapi import APIRouter, HTTPException, Header
 from pydantic import BaseModel
 from typing import Optional
 from supabase import create_client, Client
+
+# Add parent directory to path to import env_config
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from env_config import get_supabase_config
 
 logger = logging.getLogger(__name__)
 
@@ -19,9 +24,10 @@ NEON_DB_NAME = os.getenv('NEON_DB_NAME', 'neondb')
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
-# Initialize Supabase client with service role key for admin operations
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
+# Initialize Supabase client with service role key for admin operations (environment-based)
+_supabase_config = get_supabase_config()
+SUPABASE_URL = _supabase_config['url']
+SUPABASE_SERVICE_KEY = _supabase_config['service_key']
 
 def get_admin_supabase() -> Client:
     """Get Supabase client with service role key for admin operations"""

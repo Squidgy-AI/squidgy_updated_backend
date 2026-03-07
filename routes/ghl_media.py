@@ -4,6 +4,7 @@ Handles fetching and uploading media files to HighLevel accounts
 """
 
 import os
+import sys
 import logging
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form
@@ -12,14 +13,19 @@ import httpx
 from supabase import create_client, Client
 from supabase.lib.client_options import SyncClientOptions
 
+# Add parent directory to path to import env_config
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from env_config import get_supabase_config
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/ghl", tags=["ghl_media"])
 
-# Initialize Supabase client
-SUPABASE_URL = os.getenv('SUPABASE_URL')
-SUPABASE_KEY = os.getenv('SUPABASE_KEY')
-SUPABASE_SCHEMA = os.getenv('SUPABASE_SCHEMA', 'public')
+# Initialize Supabase client (environment-based)
+_supabase_config = get_supabase_config()
+SUPABASE_URL = _supabase_config['url']
+SUPABASE_KEY = _supabase_config['service_key']
+SUPABASE_SCHEMA = _supabase_config['schema']
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY, options=SyncClientOptions(schema=SUPABASE_SCHEMA))
 
 

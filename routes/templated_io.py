@@ -4,6 +4,7 @@ Handles fetching templates and updating template tags for user businesses
 """
 
 import os
+import sys
 import logging
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, HTTPException, Body
@@ -11,6 +12,10 @@ from pydantic import BaseModel
 import httpx
 from supabase import create_client, Client
 from supabase.lib.client_options import SyncClientOptions
+
+# Add parent directory to path to import env_config
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from env_config import get_supabase_config
 
 logger = logging.getLogger(__name__)
 
@@ -20,10 +25,11 @@ router = APIRouter(prefix="/api/templated", tags=["templated"])
 TEMPLATED_API_KEY = os.getenv('TEMPLATED_API_KEY')
 TEMPLATED_API_URL = "https://api.templated.io/v1"
 
-# Supabase configuration
-SUPABASE_URL = os.getenv('SUPABASE_URL')
-SUPABASE_SERVICE_KEY = os.getenv('SUPABASE_SERVICE_KEY')
-SUPABASE_SCHEMA = os.getenv('SUPABASE_SCHEMA', 'public')
+# Supabase configuration (environment-based)
+_supabase_config = get_supabase_config()
+SUPABASE_URL = _supabase_config['url']
+SUPABASE_SERVICE_KEY = _supabase_config['service_key']
+SUPABASE_SCHEMA = _supabase_config['schema']
 
 def get_supabase_client() -> Client:
     """Create and return a Supabase client"""
