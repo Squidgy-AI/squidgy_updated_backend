@@ -1,32 +1,13 @@
 # .slugignore - Exclude files from Heroku slug to reduce size
 
-# DUPLICATE DIRECTORIES - MAJOR SPACE SAVINGS
-# Main.py imports from root level, so Tools/ directory is completely redundant
-Tools/
+# Archived directories (no longer in active codebase)
+archive/
 
 # Documentation files
 *.md
 README*
 docs/
-HEROKU_DEPLOYMENT_GUIDE.md
-FACEBOOK_OAUTH_CHECKPOINT.md
 LICENSE
-
-# Database files (not needed in production)
-Database/
-*.sql
-QUICK_DATABASE_SETUP.sql
-SIMPLE_DATABASE_UPDATE.sql
-UPDATE_EXISTING_DATABASE.sql
-business_setup_complete_schema.sql
-facebook_pages_table.sql
-insert_personal_assistant.sql
-monitor_ghl_database.sql
-updated_database_schema.sql
-
-# Development and testing automation scripts (HEAVY FILES)
-facebook_pages_api_working.py
-verify_ghl_registration.py
 
 # Development files
 .git/
@@ -76,12 +57,7 @@ virtual_back/
 requirements-prod.txt
 requirements_free_embeddings.txt
 requirements_heroku.txt
-requirements_heroku_optimized.txt
 
-# Buildpack-related files that aren't needed after build
-heroku_buildpacks.txt
+# Old config files
 runtime_1.txt
 .env.heroku
-
-# Deployment scripts
-deploy_heroku_optimized.sh

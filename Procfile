@@ -1,1 +1,1 @@
-web: chmod +x install_chromium.sh && ./install_chromium.sh && WEB_CONCURRENCY=2 gunicorn main:app --config gunicorn_config.py --preload
+web: WEB_CONCURRENCY=2 gunicorn main:app --config gunicorn_config.py --preload
