@@ -5,9 +5,6 @@
     "keywords": ["python", "fastapi", "ai"],
     "buildpacks": [
       {
-        "url": "https://github.com/heroku/heroku-buildpack-apt"
-      },
-      {
         "url": "heroku/python"
       }
     ],
@@ -22,10 +19,6 @@
       "OPENAI_API_KEY": {
         "description": "OpenAI API key",
         "required": true
-      },
-      "PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD": {
-        "description": "Skip browser download during pip install",
-        "value": "1"
       }
     }
   }

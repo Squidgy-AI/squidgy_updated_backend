@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form
 from pydantic import BaseModel
 import httpx
 from supabase import create_client, Client
+from supabase.lib.client_options import SyncClientOptions
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +19,8 @@ router = APIRouter(prefix="/api/ghl", tags=["ghl_media"])
 # Initialize Supabase client
 SUPABASE_URL = os.getenv('SUPABASE_URL')
 SUPABASE_KEY = os.getenv('SUPABASE_KEY')
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+SUPABASE_SCHEMA = os.getenv('SUPABASE_SCHEMA', 'public')
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY, options=SyncClientOptions(schema=SUPABASE_SCHEMA))
 
 
 class MediaResponse(BaseModel):

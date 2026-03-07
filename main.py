@@ -26,6 +26,7 @@ from twilio.twiml.messaging_response import MessagingResponse as TwilioMessaging
 from pydantic import BaseModel, validator
 from typing import Union
 from supabase import create_client, Client
+from supabase.lib.client_options import SyncClientOptions
 from PIL import Image
 
 # Local imports
@@ -79,16 +80,24 @@ def update_file_status(file_id: str, status: str, message: str, progress: int = 
 # Environment variables
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
+SUPABASE_SCHEMA = os.getenv("SUPABASE_SCHEMA", "public")
 PERPLEXITY_API_KEY = os.getenv("PERPLEXITY_API_KEY")
 # OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
 
 print(f"Using Supabase URL: {SUPABASE_URL}")
+print(f"Using Supabase Schema: {SUPABASE_SCHEMA}")
 
 # Initialize Supabase client
 def create_supabase_client() -> Client:
-    return create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+    return create_client(
+        SUPABASE_URL,
+        SUPABASE_SERVICE_KEY,
+        options=SyncClientOptions(
+            schema=SUPABASE_SCHEMA
+        )
+    )
 
 # Initialize handlers
 active_requests: Set[str] = set()
@@ -6316,7 +6325,7 @@ async def create_ghl_user_sim(location_id: str, email: str, password: str, busin
 @app.post("/api/facebook/retry-token-capture")
 async def retry_facebook_token_capture(request: dict, background_tasks: BackgroundTasks):
     """
-    Retry Facebook token capture using ghl_automation_for_retry.py
+    Retry Facebook token capture by calling BackgroundAutomationUser1 service
     Updates facebook_integrations table with access_token, firebase_token, and expires_at
     """
     try:

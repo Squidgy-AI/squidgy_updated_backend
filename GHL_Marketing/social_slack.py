@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 import httpx
 from supabase import create_client, Client
+from supabase.lib.client_options import SyncClientOptions
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +20,8 @@ router = APIRouter(prefix="/api/social/slack", tags=["social_slack"])
 # Initialize Supabase client
 SUPABASE_URL = os.getenv('SUPABASE_URL')
 SUPABASE_KEY = os.getenv('SUPABASE_SERVICE_KEY')
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+SUPABASE_SCHEMA = os.getenv('SUPABASE_SCHEMA', 'public')
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY, options=SyncClientOptions(schema=SUPABASE_SCHEMA))
 
 # GHL's Slack App Configuration
 GHL_SLACK_CLIENT_ID = "394243081714.4376892619942"
