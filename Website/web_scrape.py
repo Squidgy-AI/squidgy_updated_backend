@@ -1,13 +1,18 @@
 # Website/web_scrape.py - Refactored to use external BackgroundAutomationUser1 service
 import os
+import sys
 import httpx
 import traceback
 from dotenv import load_dotenv
 
+# Add parent directory to path to import env_config
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from env_config import get_automation_service_url
+
 load_dotenv()
 
-# External automation service URL
-AUTOMATION_SERVICE_URL = os.getenv('AUTOMATION_USER1_SERVICE_URL', 'https://backgroundautomationuser1-1644057ede7b.herokuapp.com')
+# External automation service URL (dynamically loaded based on environment)
+AUTOMATION_SERVICE_URL = get_automation_service_url()
 
 async def capture_website_screenshot(url: str, session_id: str = None) -> dict:
     """

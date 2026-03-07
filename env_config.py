@@ -68,12 +68,31 @@ def get_supabase_config() -> Dict[str, str]:
         }
 
 
+def get_automation_service_url() -> str:
+    """
+    Get automation service URL based on current environment
+
+    Returns:
+        str: Automation service URL
+    """
+    env = get_environment()
+
+    if env == 'production':
+        return os.getenv('AUTOMATION_PROD_SERVICE_URL', 'https://prod-squidgy-browser-automation.onrender.com')
+    elif env == 'staging':
+        return os.getenv('AUTOMATION_STAGING_SERVICE_URL', 'https://staging-squidgy-browser-automation.onrender.com')
+    else:  # dev
+        return os.getenv('AUTOMATION_DEV_SERVICE_URL', 'https://backgroundautomationuser1-1644057ede7b.herokuapp.com')
+
+
 # Helper function to print current environment
 def print_environment_info():
     """Print current environment configuration"""
     env = get_environment()
     config = get_supabase_config()
+    automation_url = get_automation_service_url()
 
     print(f"🌍 Environment: {env.upper()}")
     print(f"📦 Supabase URL: {config['url']}")
+    print(f"🤖 Automation Service: {automation_url}")
     print(f"🔑 Using {'STAGING' if env == 'staging' else 'DEV' if env == 'dev' else 'PROD'} credentials")

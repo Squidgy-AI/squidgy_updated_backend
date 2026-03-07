@@ -36,7 +36,7 @@ from invitation_handler import InvitationHandler
 from file_processing_service import FileProcessingService
 from background_text_processor import get_background_processor, initialize_background_processor
 from web_analysis_client import WebAnalysisClient
-from env_config import get_supabase_config, get_environment, print_environment_info
+from env_config import get_supabase_config, get_environment, print_environment_info, get_automation_service_url
 
 # Handler classes
 
@@ -4106,7 +4106,7 @@ async def run_ghl_creation_background(
         logger.debug("[GHL BACKGROUND] Triggering BackgroundAutomationUser1 for firebase_token")
 
         try:
-            automation_service_url = os.getenv('AUTOMATION_USER1_SERVICE_URL', 'https://backgroundautomationuser1-1644057ede7b.herokuapp.com')
+            automation_service_url = get_automation_service_url()
 
             async with httpx.AsyncClient(timeout=300.0) as client:
                 automation_response = await client.post(
@@ -4207,7 +4207,7 @@ async def run_pit_token_automation(
         print(f"[PIT AUTOMATION] ✅ Updated automation status to 'pit_running'")
         
         # Call BackgroundAutomationUser1 service
-        automation_service_url = os.getenv('AUTOMATION_USER1_SERVICE_URL', 'https://backgroundautomationuser1-1644057ede7b.herokuapp.com')
+        automation_service_url = get_automation_service_url()
         
         print(f"[PIT AUTOMATION] 📞 Calling BackgroundAutomationUser1 service at: {automation_service_url}")
         
@@ -4600,7 +4600,7 @@ async def retry_ghl_automation(request: dict):
             soma_email = ghl_data.get('soma_ghl_email')
         
         # Trigger browser automation to capture firebase_token
-        automation_service_url = os.getenv('AUTOMATION_USER1_SERVICE_URL', 'https://backgroundautomationuser1-1644057ede7b.herokuapp.com')
+        automation_service_url = get_automation_service_url()
         
         # Update status to running
         supabase.table('ghl_subaccounts').update({
@@ -4769,7 +4769,7 @@ async def refresh_ghl_tokens(firm_user_id: str, agent_id: str = "SOL"):
         # Call BackgroundAutomationUser1 service to capture tokens
         print(f"[TOKEN REFRESH] 📞 Calling BackgroundAutomationUser1 service...")
 
-        automation_service_url = os.getenv('AUTOMATION_USER1_SERVICE_URL', 'https://backgroundautomationuser1-1644057ede7b.herokuapp.com')
+        automation_service_url = get_automation_service_url()
 
         async with httpx.AsyncClient(timeout=300.0) as client:
             automation_response = await client.post(
@@ -6410,7 +6410,7 @@ async def run_facebook_retry_automation(firm_user_id: str, location_id: str):
         # success = await automation.run_retry_automation("", "", location_id, firm_user_id)
 
         # NEW CODE - Call BackgroundAutomationUser1 service
-        automation_service_url = os.getenv('AUTOMATION_USER1_SERVICE_URL', 'https://backgroundautomationuser1-1644057ede7b.herokuapp.com')
+        automation_service_url = get_automation_service_url()
 
         print(f"[RETRY AUTOMATION] Calling BackgroundAutomationUser1 service at: {automation_service_url}")
 
@@ -6481,7 +6481,7 @@ async def run_complete_automation(request: dict, background_tasks: BackgroundTas
         print(f"[COMPLETE AUTOMATION] Starting for firm_user_id: {firm_user_id}, location: {location_id}")
         
         # Call BackgroundAutomationUser1 service
-        automation_service_url = os.getenv('AUTOMATION_USER1_SERVICE_URL', 'https://backgroundautomationuser1-1644057ede7b.herokuapp.com')
+        automation_service_url = get_automation_service_url()
         
         print(f"[COMPLETE AUTOMATION] Calling BackgroundAutomationUser1 service at: {automation_service_url}")
         
@@ -6610,7 +6610,7 @@ async def run_firebase_token_refresh(firm_user_id: str, location_id: str, email:
         }).eq('firm_user_id', firm_user_id).execute()
         
         # Call BackgroundAutomationUser1 service
-        automation_service_url = os.getenv('AUTOMATION_USER1_SERVICE_URL', 'https://backgroundautomationuser1-1644057ede7b.herokuapp.com')
+        automation_service_url = get_automation_service_url()
         
         print(f"[TOKEN REFRESH] Calling BackgroundAutomationUser1 service at: {automation_service_url}")
         
