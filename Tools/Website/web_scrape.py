@@ -1,5 +1,6 @@
 # Website/web_scrape.py - FINAL VERSION
 import os
+import sys
 import asyncio
 import aiohttp
 from supabase import create_client, Client
@@ -15,12 +16,17 @@ from io import BytesIO
 from concurrent.futures import ThreadPoolExecutor
 import threading
 
+# Add parent directory to path to import env_config
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from env_config import get_supabase_config
+
 load_dotenv()
 
-# Initialize Supabase client
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
-SUPABASE_SCHEMA = os.getenv("SUPABASE_SCHEMA", "public")
+# Initialize Supabase client (environment-based)
+_supabase_config = get_supabase_config()
+SUPABASE_URL = _supabase_config['url']
+SUPABASE_SERVICE_KEY = _supabase_config['service_key']
+SUPABASE_SCHEMA = _supabase_config['schema']
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY, options=SyncClientOptions(schema=SUPABASE_SCHEMA))
 
 # Create a thread pool for blocking operations

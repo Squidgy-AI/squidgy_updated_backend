@@ -1,19 +1,27 @@
 import os
+import sys
 from dataclasses import dataclass, field
 from typing import Optional, List
+
+# Add parent directory to path to import env_config
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from env_config import get_supabase_config
+
+# Get environment-based Supabase config
+_supabase_config = get_supabase_config()
 
 @dataclass
 class MCPConfig:
     """MCP system configuration"""
-    
+
     # Environment detection
     environment: str = os.getenv("ENVIRONMENT", "development")
     is_heroku: bool = "DYNO" in os.environ
     is_digitalocean: bool = "DO_APP_NAME" in os.environ
-    
-    # Supabase (reuse existing config)
-    supabase_url: str = os.getenv("SUPABASE_URL")
-    supabase_key: str = os.getenv("SUPABASE_SERVICE_KEY")
+
+    # Supabase (reuse environment-based config)
+    supabase_url: str = _supabase_config['url']
+    supabase_key: str = _supabase_config['service_key']
     
     # MCP specific settings
     max_concurrent_scans: int = int(os.getenv("MCP_MAX_CONCURRENT_SCANS", "5"))

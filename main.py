@@ -8527,8 +8527,8 @@ async def notify_agent_enablement(request: AgentEnablementNotification):
             # Frontend listens to channel: agent-refresh-{user_id}
             try:
                 import httpx
-                supabase_url = os.getenv('SUPABASE_URL') or os.getenv('VITE_SUPABASE_URL')
-                supabase_key = os.getenv('SUPABASE_SERVICE_ROLE_KEY') or os.getenv('SUPABASE_KEY') or os.getenv('VITE_SUPABASE_ANON_KEY')
+                supabase_url = SUPABASE_URL
+                supabase_key = SUPABASE_SERVICE_KEY
                 
                 if supabase_url and supabase_key:
                     # Use Supabase Realtime broadcast via REST API
@@ -8628,8 +8628,8 @@ async def redirect_to_agent(request: AgentRedirectRequest):
         broadcast_sent = False
         try:
             import httpx
-            supabase_url = os.getenv('SUPABASE_URL') or os.getenv('VITE_SUPABASE_URL')
-            supabase_key = os.getenv('SUPABASE_SERVICE_ROLE_KEY') or os.getenv('SUPABASE_KEY') or os.getenv('VITE_SUPABASE_ANON_KEY')
+            supabase_url = SUPABASE_URL
+            supabase_key = SUPABASE_SERVICE_KEY
             
             if supabase_url and supabase_key:
                 broadcast_url = f"{supabase_url}/realtime/v1/api/broadcast"
@@ -8711,8 +8711,8 @@ async def notify_content_refresh(request: ContentRefreshNotification):
         # Broadcast refresh signal via Supabase Realtime
         try:
             import httpx
-            supabase_url = os.getenv('SUPABASE_URL') or os.getenv('VITE_SUPABASE_URL')
-            supabase_key = os.getenv('SUPABASE_SERVICE_ROLE_KEY') or os.getenv('SUPABASE_KEY') or os.getenv('VITE_SUPABASE_ANON_KEY')
+            supabase_url = SUPABASE_URL
+            supabase_key = SUPABASE_SERVICE_KEY
             
             if supabase_url and supabase_key:
                 broadcast_url = f"{supabase_url}/realtime/v1/api/broadcast"
